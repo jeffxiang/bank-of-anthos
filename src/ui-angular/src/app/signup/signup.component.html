@@ -1,36 +1,86 @@
-<div class="container">
-  <div class="card narrow">
-    <h1>Register a new account</h1>
+<main class="page container">
+  <mat-card class="signup-card">
+    <mat-card-title>Register a new account</mat-card-title>
     <div class="alert alert-danger" *ngIf="error">{{ error }}</div>
-    <form [formGroup]="form" (ngSubmit)="submit()" novalidate>
-      <div class="grid">
-        <div class="form-group">
-          <label for="username">Username</label>
-          <input id="username" formControlName="username">
-          <small class="muted" *ngIf="form.controls.username.touched && form.controls.username.invalid">
+    <form class="form-stack" [formGroup]="form" (ngSubmit)="submit()" novalidate>
+      <div class="form-grid">
+        <mat-form-field appearance="outline">
+          <mat-label>Username</mat-label>
+          <input matInput id="username" formControlName="username">
+          <mat-error *ngIf="form.controls.username.touched && form.controls.username.invalid">
             Username must contain 2 to 15 alphanumeric characters or underscores.
-          </small>
-        </div>
-        <div class="form-group"><label for="password">Password</label><input id="password" type="password" formControlName="password"></div>
-        <div class="form-group"><label for="passwordRepeat">Confirm Password</label><input id="passwordRepeat" type="password" formControlName="passwordRepeat"></div>
-        <div class="form-group"><label for="firstname">First name</label><input id="firstname" formControlName="firstname"></div>
-        <div class="form-group"><label for="lastname">Last name</label><input id="lastname" formControlName="lastname"></div>
-        <div class="form-group"><label for="birthday">Birthday</label><input id="birthday" type="date" min="1900-01-01" [max]="maxBirthday" formControlName="birthday"></div>
-        <div class="form-group">
-          <label for="timezone">Timezone</label>
-          <select id="timezone" formControlName="timezone">
-            <option *ngFor="let timezone of timezones" [value]="timezone">{{ timezone }}</option>
-          </select>
-        </div>
+          </mat-error>
+        </mat-form-field>
+        <mat-form-field appearance="outline">
+          <mat-label>Password</mat-label>
+          <input matInput id="password" type="password" formControlName="password">
+          <mat-error *ngIf="form.controls.password.touched && form.controls.password.invalid">
+            Please enter a password.
+          </mat-error>
+        </mat-form-field>
+        <mat-form-field appearance="outline">
+          <mat-label>Confirm Password</mat-label>
+          <input matInput id="passwordRepeat" type="password" formControlName="passwordRepeat">
+          <mat-error *ngIf="form.controls.passwordRepeat.touched && form.controls.passwordRepeat.hasError('required')">
+            Please confirm your password.
+          </mat-error>
+          <mat-error *ngIf="form.controls.passwordRepeat.touched && form.controls.passwordRepeat.hasError('mismatch')">
+            Passwords do not match.
+          </mat-error>
+        </mat-form-field>
+        <mat-form-field appearance="outline">
+          <mat-label>First name</mat-label>
+          <input matInput id="firstname" formControlName="firstname">
+          <mat-error *ngIf="form.controls.firstname.touched && form.controls.firstname.invalid">
+            Please enter your first name.
+          </mat-error>
+        </mat-form-field>
+        <mat-form-field appearance="outline">
+          <mat-label>Last name</mat-label>
+          <input matInput id="lastname" formControlName="lastname">
+          <mat-error *ngIf="form.controls.lastname.touched && form.controls.lastname.invalid">
+            Please enter your last name.
+          </mat-error>
+        </mat-form-field>
+        <mat-form-field appearance="outline">
+          <mat-label>Birthday</mat-label>
+          <input matInput id="birthday" type="date" min="1900-01-01" [max]="maxBirthday" formControlName="birthday">
+          <mat-error *ngIf="form.controls.birthday.touched && form.controls.birthday.invalid">
+            Please enter your birthday.
+          </mat-error>
+        </mat-form-field>
+        <mat-form-field appearance="outline">
+          <mat-label>Timezone</mat-label>
+          <mat-select id="timezone" formControlName="timezone">
+            <mat-option *ngFor="let timezone of timezones" [value]="timezone">{{ timezone }}</mat-option>
+          </mat-select>
+          <mat-error *ngIf="form.controls.timezone.touched && form.controls.timezone.invalid">
+            Please select your timezone.
+          </mat-error>
+        </mat-form-field>
       </div>
-      <div class="form-group"><label for="address">Address</label><input id="address" formControlName="address"></div>
-      <div class="grid">
-        <div class="form-group"><label for="state">State</label><input id="state" formControlName="state"></div>
-        <div class="form-group"><label for="zip">Zip</label><input id="zip" formControlName="zip"></div>
-        <div class="form-group"><label for="ssn">SSN</label><input id="ssn" formControlName="ssn"></div>
+      <mat-form-field appearance="outline">
+        <mat-label>Address</mat-label>
+        <input matInput id="address" formControlName="address">
+      </mat-form-field>
+      <div class="form-grid">
+        <mat-form-field appearance="outline">
+          <mat-label>State</mat-label>
+          <input matInput id="state" formControlName="state">
+        </mat-form-field>
+        <mat-form-field appearance="outline">
+          <mat-label>Zip</mat-label>
+          <input matInput id="zip" formControlName="zip">
+        </mat-form-field>
+        <mat-form-field appearance="outline">
+          <mat-label>SSN</mat-label>
+          <input matInput id="ssn" formControlName="ssn">
+        </mat-form-field>
       </div>
-      <button class="btn btn-primary" type="submit" [disabled]="submitting">Create Account</button>
-      <a class="btn btn-secondary" routerLink="/login">Cancel</a>
+      <div class="form-actions">
+        <button mat-raised-button color="primary" type="submit" [disabled]="submitting">Create Account</button>
+        <a mat-button routerLink="/login">Cancel</a>
+      </div>
     </form>
-  </div>
-</div>
+  </mat-card>
+</main>

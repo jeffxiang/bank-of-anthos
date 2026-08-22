@@ -2,6 +2,12 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ReactiveFormsModule } from '@angular/forms';
 import { RouterTestingModule } from '@angular/router/testing';
 import { Router } from '@angular/router';
+import { NoopAnimationsModule } from '@angular/platform-browser/animations';
+import { MatButtonModule } from '@angular/material/button';
+import { MatCardModule } from '@angular/material/card';
+import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatInputModule } from '@angular/material/input';
+import { MatSelectModule } from '@angular/material/select';
 import { of } from 'rxjs';
 import { SignupComponent } from './signup.component';
 import { ApiService } from '../api.service';
@@ -9,6 +15,7 @@ import { AuthService } from '../auth/auth.service';
 
 describe('SignupComponent', () => {
   let component: SignupComponent;
+  let fixture: ComponentFixture<SignupComponent>;
   let api: jasmine.SpyObj<ApiService>;
   let auth: jasmine.SpyObj<AuthService>;
 
@@ -19,7 +26,16 @@ describe('SignupComponent', () => {
       user: 'newuser', acct: '1', name: 'New User', iat: 1, exp: 9999999999
     }));
     await TestBed.configureTestingModule({
-      imports: [ReactiveFormsModule, RouterTestingModule],
+      imports: [
+        ReactiveFormsModule,
+        RouterTestingModule,
+        NoopAnimationsModule,
+        MatButtonModule,
+        MatCardModule,
+        MatFormFieldModule,
+        MatInputModule,
+        MatSelectModule
+      ],
       declarations: [SignupComponent],
       providers: [
         { provide: ApiService, useValue: api },
@@ -27,7 +43,7 @@ describe('SignupComponent', () => {
       ]
     }).compileComponents();
     spyOn(TestBed.inject(Router), 'navigate').and.returnValue(Promise.resolve(true));
-    const fixture: ComponentFixture<SignupComponent> = TestBed.createComponent(SignupComponent);
+    fixture = TestBed.createComponent(SignupComponent);
     component = fixture.componentInstance;
   });
 
@@ -37,6 +53,15 @@ describe('SignupComponent', () => {
     expect(component.form.controls.username.invalid).toBeTrue();
     expect(component.error).toBe('Passwords do not match');
     expect(api.createUser).not.toHaveBeenCalled();
+  });
+
+  it('renders an inline error for mismatched passwords', () => {
+    component.form.patchValue({ password: 'one', passwordRepeat: 'two' });
+    component.form.controls.passwordRepeat.markAsTouched();
+    fixture.detectChanges();
+
+    const errors = Array.from(fixture.nativeElement.querySelectorAll('mat-error')) as HTMLElement[];
+    expect(errors.map(error => error.textContent?.trim())).toEqual(['Passwords do not match.']);
   });
 
   it('accepts valid signup fields', () => {
