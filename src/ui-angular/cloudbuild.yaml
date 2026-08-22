@@ -1,0 +1,10 @@
+steps:
+- name: gcr.io/k8s-skaffold/skaffold:v2.22.0
+  args:
+  - skaffold
+  - build
+  - --file-output=/workspace/artifacts.json
+  - --default-repo=$_CONTAINER_REGISTRY
+  - --module=$_TEAM
+options:
+  logging: CLOUD_LOGGING_ONLY

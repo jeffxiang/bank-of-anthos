@@ -1,0 +1,41 @@
+apiVersion: skaffold/v4beta1
+kind: Config
+metadata:
+  name: ui-angular
+build:
+  artifacts:
+  - image: ui-angular
+    context: .
+  tagPolicy:
+    sha256: {}
+deploy:
+  kubectl: {}
+  tolerateFailuresUntilDeadline: true
+profiles:
+- name: development
+  activation:
+  - command: dev
+  manifests:
+    kustomize:
+      paths:
+      - k8s/overlays/development
+- name: staging
+  manifests:
+    kustomize:
+      paths:
+      - k8s/overlays/staging
+- name: production
+  manifests:
+    kustomize:
+      paths:
+      - k8s/overlays/production
+- name: production-fwi
+  manifests:
+    kustomize:
+      paths:
+      - k8s/overlays/production-fwi
+- name: production-fwi-ingress
+  manifests:
+    kustomize:
+      paths:
+      - k8s/overlays/production-fwi-ingress

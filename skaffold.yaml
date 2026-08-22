@@ -26,6 +26,9 @@ requires:
   - frontend
   path: src/frontend/skaffold.yaml
 - configs:
+  - ui-angular
+  path: src/ui-angular/skaffold.yaml
+- configs:
   - loadgenerator
   path: src/loadgenerator/skaffold.yaml
 - configs:

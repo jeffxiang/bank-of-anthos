@@ -1,0 +1,79 @@
+<header class="navbar">
+  <div class="container">
+    <a class="brand" routerLink="/home">Bank of Anthos</a>
+    <div class="navbar-actions">
+      <span>{{ displayName }}</span>
+      <button class="btn btn-link" type="button" (click)="logout()">Sign out</button>
+    </div>
+  </div>
+</header>
+<main class="page container">
+  <div class="alert alert-success" *ngIf="message">{{ message }}</div>
+  <div class="alert alert-danger" *ngIf="error">{{ error }}</div>
+  <section class="card">
+    <p class="muted">Account Number: {{ accountId }}</p>
+    <p class="muted">Current Balance</p>
+    <div class="balance">{{ balance | currencyCents }}</div>
+  </section>
+  <section class="grid" style="margin-top: 1rem">
+    <form class="card" [formGroup]="depositForm" (ngSubmit)="submitDeposit()" novalidate>
+      <h2>Make a Deposit</h2>
+      <div class="form-group">
+        <label for="deposit-account">External Account</label>
+        <select id="deposit-account" formControlName="account">
+          <option *ngFor="let account of depositAccounts" [value]="externalValue(account)">
+            {{ account.label }} - {{ account.account_num }} - {{ account.routing_num }}
+          </option>
+          <option value="add">New external account</option>
+        </select>
+      </div>
+      <div *ngIf="depositForm.value.account === 'add'">
+        <div class="form-group"><label>Account Number</label><input formControlName="newAccount" inputmode="numeric"></div>
+        <div class="form-group"><label>Routing Number</label><input formControlName="newRouting" inputmode="numeric"></div>
+        <div class="form-group"><label>Account Label (Optional)</label><input formControlName="newLabel"></div>
+      </div>
+      <div class="form-group"><label>Deposit Amount</label><input type="number" step="0.01" min="0.01" max="500000" formControlName="amount"></div>
+      <button class="btn btn-primary" type="submit">Deposit</button>
+    </form>
+    <form class="card" [formGroup]="paymentForm" (ngSubmit)="submitPayment()" novalidate>
+      <h2>Send a Payment</h2>
+      <div class="form-group">
+        <label for="payment-recipient">Recipient</label>
+        <select id="payment-recipient" formControlName="recipient">
+          <option *ngFor="let account of paymentRecipients" [value]="account.account_num">
+            {{ account.label }} - {{ account.account_num }}
+          </option>
+          <option value="add">New recipient</option>
+        </select>
+      </div>
+      <div *ngIf="paymentForm.value.recipient === 'add'">
+        <div class="form-group"><label>Account Number</label><input formControlName="newAccount" inputmode="numeric"></div>
+        <div class="form-group"><label>Contact Label (Optional)</label><input formControlName="newLabel"></div>
+      </div>
+      <div class="form-group"><label>Transaction Amount</label><input type="number" step="0.01" min="0.01" [max]="(balance || 0) / 100" formControlName="amount"></div>
+      <button class="btn btn-primary" type="submit">Send Payment</button>
+    </form>
+  </section>
+  <section class="card" style="margin-top: 1rem">
+    <h2>Transaction History</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Type</th><th>Account</th><th>Label</th><th>Amount</th></tr></thead>
+        <tbody>
+          <tr *ngFor="let transaction of transactions">
+            <td>{{ transaction.timestamp | date:'MMM d' }}</td>
+            <td [class.credit]="isIncoming(transaction)" [class.debit]="!isIncoming(transaction)">
+              {{ isIncoming(transaction) ? 'Credit' : 'Debit' }}
+            </td>
+            <td>{{ transactionAccount(transaction) }}</td>
+            <td>{{ transactionLabel(transaction) }}</td>
+            <td [class.credit]="isIncoming(transaction)" [class.debit]="!isIncoming(transaction)">
+              {{ isIncoming(transaction) ? '+' : '-' }}{{ transaction.amount | currencyCents }}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <div class="footer">This website is hosted for demo purposes only. It is not an actual bank.</div>
+</main>
