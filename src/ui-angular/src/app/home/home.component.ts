@@ -23,6 +23,7 @@ export class HomeComponent implements OnInit {
   message = '';
   error = '';
   submitting = false;
+  displayedColumns = ['date', 'type', 'account', 'label', 'amount'];
   paymentForm = this.fb.group({
     recipient: ['', Validators.required],
     newAccount: ['', Validators.pattern(/^[0-9]{10}$/)],
