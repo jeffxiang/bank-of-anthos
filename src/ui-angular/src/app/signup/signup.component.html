@@ -21,10 +21,10 @@
         <mat-form-field appearance="outline">
           <mat-label>Confirm Password</mat-label>
           <input matInput id="passwordRepeat" type="password" formControlName="passwordRepeat">
-          <mat-error *ngIf="form.controls.passwordRepeat.touched && form.controls.passwordRepeat.invalid">
+          <mat-error *ngIf="form.controls.passwordRepeat.touched && form.controls.passwordRepeat.hasError('required')">
             Please confirm your password.
           </mat-error>
-          <mat-error *ngIf="form.controls.passwordRepeat.touched && !form.controls.passwordRepeat.invalid && passwordMismatch">
+          <mat-error *ngIf="form.controls.passwordRepeat.touched && form.controls.passwordRepeat.hasError('mismatch')">
             Passwords do not match.
           </mat-error>
         </mat-form-field>

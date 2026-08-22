@@ -1,8 +1,24 @@
 import { Component } from '@angular/core';
-import { FormBuilder, Validators } from '@angular/forms';
+import { AbstractControl, FormBuilder, ValidationErrors, Validators } from '@angular/forms';
 import { Router } from '@angular/router';
 import { ApiService } from '../api.service';
 import { AuthService } from '../auth/auth.service';
+
+function passwordMismatchValidator(group: AbstractControl): ValidationErrors | null {
+  const password = group.get('password');
+  const passwordRepeat = group.get('passwordRepeat');
+  if (!password || !passwordRepeat) return null;
+
+  const errors = passwordRepeat.errors;
+  if (errors?.['mismatch']) {
+    const { mismatch, ...remaining } = errors;
+    passwordRepeat.setErrors(Object.keys(remaining).length ? remaining : null);
+  }
+  if (!passwordRepeat.value || password.value === passwordRepeat.value) return null;
+
+  passwordRepeat.setErrors({ ...(passwordRepeat.errors || {}), mismatch: true });
+  return { passwordMismatch: true };
+}
 
 @Component({
   selector: 'app-signup',
@@ -26,7 +42,7 @@ export class SignupComponent {
     ssn: [{ value: '111-22-3333', disabled: true }, Validators.required],
     birthday: ['', Validators.required],
     timezone: ['-5', Validators.required]
-  });
+  }, { validators: passwordMismatchValidator });
 
   constructor(
     private fb: FormBuilder,

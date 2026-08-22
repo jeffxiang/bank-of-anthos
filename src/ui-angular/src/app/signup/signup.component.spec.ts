@@ -15,6 +15,7 @@ import { AuthService } from '../auth/auth.service';
 
 describe('SignupComponent', () => {
   let component: SignupComponent;
+  let fixture: ComponentFixture<SignupComponent>;
   let api: jasmine.SpyObj<ApiService>;
   let auth: jasmine.SpyObj<AuthService>;
 
@@ -42,7 +43,7 @@ describe('SignupComponent', () => {
       ]
     }).compileComponents();
     spyOn(TestBed.inject(Router), 'navigate').and.returnValue(Promise.resolve(true));
-    const fixture: ComponentFixture<SignupComponent> = TestBed.createComponent(SignupComponent);
+    fixture = TestBed.createComponent(SignupComponent);
     component = fixture.componentInstance;
   });
 
@@ -52,6 +53,15 @@ describe('SignupComponent', () => {
     expect(component.form.controls.username.invalid).toBeTrue();
     expect(component.error).toBe('Passwords do not match');
     expect(api.createUser).not.toHaveBeenCalled();
+  });
+
+  it('renders an inline error for mismatched passwords', () => {
+    component.form.patchValue({ password: 'one', passwordRepeat: 'two' });
+    component.form.controls.passwordRepeat.markAsTouched();
+    fixture.detectChanges();
+
+    const errors = Array.from(fixture.nativeElement.querySelectorAll('mat-error')) as HTMLElement[];
+    expect(errors.map(error => error.textContent?.trim())).toEqual(['Passwords do not match.']);
   });
 
   it('accepts valid signup fields', () => {
