@@ -14,6 +14,11 @@ server {
         return 200 "${VERSION}\n";
     }
 
+    location = /config.json {
+        default_type application/json;
+        return 200 '{"demoUsername":"${DEMO_LOGIN_USERNAME}","demoPassword":"${DEMO_LOGIN_PASSWORD}","localRouting":"${LOCAL_ROUTING_NUM}"}';
+    }
+
     location /api/userservice/ {
         proxy_pass http://${USERSERVICE_API_ADDR}/;
     }

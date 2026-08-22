@@ -9,6 +9,7 @@ import { ApiService } from '../api.service';
 import { AuthService } from '../auth/auth.service';
 import { TransactionsService } from '../transactions.service';
 import { CurrencyPipe } from '../shared/currency.pipe';
+import { RuntimeConfigService } from '../runtime-config.service';
 
 describe('HomeComponent', () => {
   let component: HomeComponent;
@@ -37,6 +38,9 @@ describe('HomeComponent', () => {
       providers: [
         { provide: ApiService, useValue: api },
         { provide: AuthService, useValue: { claims, logout: jasmine.createSpy('logout') } },
+        { provide: RuntimeConfigService, useValue: {
+          demoUsername: 'testuser', demoPassword: 'bankofanthos', localRouting: '883745000'
+        } },
         TransactionsService
       ]
     }).compileComponents();
@@ -57,6 +61,16 @@ describe('HomeComponent', () => {
     component.submitPayment();
     expect(api.transaction).toHaveBeenCalledWith(jasmine.objectContaining({
       amount: 1234, uuid: jasmine.any(String)
+    }));
+  });
+
+  it('uses runtime routing number for a new recipient', () => {
+    component.paymentForm.patchValue({
+      recipient: 'add', newAccount: '1234567890', amount: '12.34'
+    });
+    component.submitPayment();
+    expect(api.addContact).toHaveBeenCalledWith('testuser', jasmine.objectContaining({
+      routing_num: '883745000'
     }));
   });
 

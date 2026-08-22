@@ -3,10 +3,7 @@
 // The list of file replacements can be found in `angular.json`.
 
 export const environment = {
-  production: false,
-  demoUsername: 'testuser',
-  demoPassword: 'bankofanthos',
-  localRouting: '883745000'
+  production: false
 };
 
 /*

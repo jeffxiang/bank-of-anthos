@@ -2,7 +2,7 @@ import { Component } from '@angular/core';
 import { FormBuilder, Validators } from '@angular/forms';
 import { Router } from '@angular/router';
 import { AuthService } from '../auth/auth.service';
-import { environment } from '../../environments/environment';
+import { RuntimeConfigService } from '../runtime-config.service';
 
 @Component({
   selector: 'app-login',
@@ -13,15 +13,21 @@ export class LoginComponent {
   error = '';
   submitting = false;
   form = this.fb.group({
-    username: [environment.demoUsername, Validators.required],
-    password: [environment.demoPassword, Validators.required]
+    username: ['', Validators.required],
+    password: ['', Validators.required]
   });
 
   constructor(
     private fb: FormBuilder,
     private auth: AuthService,
-    private router: Router
-  ) {}
+    private router: Router,
+    private config: RuntimeConfigService
+  ) {
+    this.form.patchValue({
+      username: this.config.demoUsername,
+      password: this.config.demoPassword
+    });
+  }
 
   submit(): void {
     this.error = '';

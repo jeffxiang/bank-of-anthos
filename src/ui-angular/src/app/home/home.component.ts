@@ -7,7 +7,7 @@ import { ApiService } from '../api.service';
 import { AuthService } from '../auth/auth.service';
 import { Contact, Transaction } from '../models';
 import { TransactionsService } from '../transactions.service';
-import { environment } from '../../environments/environment';
+import { RuntimeConfigService } from '../runtime-config.service';
 
 @Component({
   selector: 'app-home',
@@ -41,7 +41,8 @@ export class HomeComponent implements OnInit {
     private api: ApiService,
     private auth: AuthService,
     private tx: TransactionsService,
-    private router: Router
+    private router: Router,
+    private config: RuntimeConfigService
   ) {}
 
   ngOnInit(): void {
@@ -98,7 +99,7 @@ export class HomeComponent implements OnInit {
       ? this.api.addContact(this.username, {
         label: this.paymentForm.value.newLabel || this.paymentForm.value.newAccount!,
         account_num: this.paymentForm.value.newAccount!,
-        routing_num: environment.localRouting,
+        routing_num: this.config.localRouting,
         is_external: false
       })
       : of({});
@@ -123,7 +124,7 @@ export class HomeComponent implements OnInit {
     }
     const external = this.depositContact();
     if (!external || (this.depositForm.value.account === 'add' &&
-      this.depositForm.value.newRouting === environment.localRouting)) {
+      this.depositForm.value.newRouting === this.config.localRouting)) {
       this.error = 'Invalid routing number';
       return;
     }
@@ -155,7 +156,7 @@ export class HomeComponent implements OnInit {
     return {
       label: this.paymentForm.value.newLabel || this.paymentForm.value.newAccount,
       account_num: this.paymentForm.value.newAccount,
-      routing_num: environment.localRouting,
+      routing_num: this.config.localRouting,
       is_external: false
     };
   }
