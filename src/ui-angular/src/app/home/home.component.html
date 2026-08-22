@@ -19,93 +19,97 @@
   </mat-card>
   <section class="form-grid transaction-forms">
     <mat-card>
-      <form class="card-form" [formGroup]="depositForm" (ngSubmit)="submitDeposit()" novalidate>
-      <h2 mat-card-title>Make a Deposit</h2>
-      <mat-form-field appearance="outline">
-        <mat-label>External Account</mat-label>
-        <mat-select id="deposit-account" formControlName="account">
-          <mat-option *ngFor="let account of depositAccounts" [value]="externalValue(account)">
-            {{ account.label }} - {{ account.account_num }} - {{ account.routing_num }}
-          </mat-option>
-          <mat-option value="add">New external account</mat-option>
-        </mat-select>
-        <mat-error *ngIf="depositForm.controls.account.touched && depositForm.controls.account.invalid">
-          Please select an external account.
-        </mat-error>
-      </mat-form-field>
-      <div *ngIf="depositForm.value.account === 'add'">
-        <mat-form-field appearance="outline">
-          <mat-label>Account Number</mat-label>
-          <input matInput formControlName="newAccount" inputmode="numeric">
-          <mat-error *ngIf="depositForm.controls.newAccount.touched && depositForm.controls.newAccount.invalid">
-            Enter a 10-digit account number.
-          </mat-error>
-        </mat-form-field>
-        <mat-form-field appearance="outline">
-          <mat-label>Routing Number</mat-label>
-          <input matInput formControlName="newRouting" inputmode="numeric">
-          <mat-error *ngIf="depositForm.controls.newRouting.touched && depositForm.controls.newRouting.invalid">
-            Enter a 9-digit routing number.
-          </mat-error>
-        </mat-form-field>
-        <mat-form-field appearance="outline">
-          <mat-label>Account Label (Optional)</mat-label>
-          <input matInput formControlName="newLabel">
-        </mat-form-field>
-      </div>
-      <mat-form-field appearance="outline">
-        <mat-label>Deposit Amount</mat-label>
-        <input matInput type="number" step="0.01" min="0.01" max="500000" formControlName="amount">
-        <mat-error *ngIf="depositForm.controls.amount.touched && depositForm.controls.amount.invalid">
-          Enter an amount between $0.01 and $500,000.
-        </mat-error>
-      </mat-form-field>
-      <button mat-raised-button color="primary" type="submit" [disabled]="submitting">
-        <mat-spinner *ngIf="submitting" class="button-spinner" diameter="20" aria-label="Processing transaction"></mat-spinner>
-        <span>Deposit</span>
-      </button>
-      </form>
+      <mat-card-content>
+        <form class="card-form" [formGroup]="depositForm" (ngSubmit)="submitDeposit()" novalidate>
+          <h2 mat-card-title>Make a Deposit</h2>
+          <mat-form-field appearance="outline">
+            <mat-label>External Account</mat-label>
+            <mat-select id="deposit-account" formControlName="account">
+              <mat-option *ngFor="let account of depositAccounts" [value]="externalValue(account)">
+                {{ account.label }} - {{ account.account_num }} - {{ account.routing_num }}
+              </mat-option>
+              <mat-option value="add">New external account</mat-option>
+            </mat-select>
+            <mat-error *ngIf="depositForm.controls.account.touched && depositForm.controls.account.invalid">
+              Please select an external account.
+            </mat-error>
+          </mat-form-field>
+          <div *ngIf="depositForm.value.account === 'add'">
+            <mat-form-field appearance="outline">
+              <mat-label>Account Number</mat-label>
+              <input matInput formControlName="newAccount" inputmode="numeric">
+              <mat-error *ngIf="depositForm.controls.newAccount.touched && depositForm.controls.newAccount.invalid">
+                Enter a 10-digit account number.
+              </mat-error>
+            </mat-form-field>
+            <mat-form-field appearance="outline">
+              <mat-label>Routing Number</mat-label>
+              <input matInput formControlName="newRouting" inputmode="numeric">
+              <mat-error *ngIf="depositForm.controls.newRouting.touched && depositForm.controls.newRouting.invalid">
+                Enter a 9-digit routing number.
+              </mat-error>
+            </mat-form-field>
+            <mat-form-field appearance="outline">
+              <mat-label>Account Label (Optional)</mat-label>
+              <input matInput formControlName="newLabel">
+            </mat-form-field>
+          </div>
+          <mat-form-field appearance="outline">
+            <mat-label>Deposit Amount</mat-label>
+            <input matInput type="number" step="0.01" min="0.01" max="500000" formControlName="amount">
+            <mat-error *ngIf="depositForm.controls.amount.touched && depositForm.controls.amount.invalid">
+              Enter an amount between $0.01 and $500,000.
+            </mat-error>
+          </mat-form-field>
+          <button mat-raised-button color="primary" type="submit" [disabled]="submitting">
+            <mat-spinner *ngIf="submitting" class="button-spinner" diameter="20" aria-label="Processing transaction"></mat-spinner>
+            <span>Deposit</span>
+          </button>
+        </form>
+      </mat-card-content>
     </mat-card>
     <mat-card>
-      <form class="card-form" [formGroup]="paymentForm" (ngSubmit)="submitPayment()" novalidate>
-      <h2 mat-card-title>Send a Payment</h2>
-      <mat-form-field appearance="outline">
-        <mat-label>Recipient</mat-label>
-        <mat-select id="payment-recipient" formControlName="recipient">
-          <mat-option *ngFor="let account of paymentRecipients" [value]="account.account_num">
-            {{ account.label }} - {{ account.account_num }}
-          </mat-option>
-          <mat-option value="add">New recipient</mat-option>
-        </mat-select>
-        <mat-error *ngIf="paymentForm.controls.recipient.touched && paymentForm.controls.recipient.invalid">
-          Please select a recipient.
-        </mat-error>
-      </mat-form-field>
-      <div *ngIf="paymentForm.value.recipient === 'add'">
-        <mat-form-field appearance="outline">
-          <mat-label>Account Number</mat-label>
-          <input matInput formControlName="newAccount" inputmode="numeric">
-          <mat-error *ngIf="paymentForm.controls.newAccount.touched && paymentForm.controls.newAccount.invalid">
-            Enter a 10-digit account number.
-          </mat-error>
-        </mat-form-field>
-        <mat-form-field appearance="outline">
-          <mat-label>Contact Label (Optional)</mat-label>
-          <input matInput formControlName="newLabel">
-        </mat-form-field>
-      </div>
-      <mat-form-field appearance="outline">
-        <mat-label>Transaction Amount</mat-label>
-        <input matInput type="number" step="0.01" min="0.01" [max]="(balance || 0) / 100" formControlName="amount">
-        <mat-error *ngIf="paymentForm.controls.amount.touched && paymentForm.controls.amount.invalid">
-          Enter a positive transaction amount.
-        </mat-error>
-      </mat-form-field>
-      <button mat-raised-button color="primary" type="submit" [disabled]="submitting">
-        <mat-spinner *ngIf="submitting" class="button-spinner" diameter="20" aria-label="Processing transaction"></mat-spinner>
-        <span>Send Payment</span>
-      </button>
-      </form>
+      <mat-card-content>
+        <form class="card-form" [formGroup]="paymentForm" (ngSubmit)="submitPayment()" novalidate>
+          <h2 mat-card-title>Send a Payment</h2>
+          <mat-form-field appearance="outline">
+            <mat-label>Recipient</mat-label>
+            <mat-select id="payment-recipient" formControlName="recipient">
+              <mat-option *ngFor="let account of paymentRecipients" [value]="account.account_num">
+                {{ account.label }} - {{ account.account_num }}
+              </mat-option>
+              <mat-option value="add">New recipient</mat-option>
+            </mat-select>
+            <mat-error *ngIf="paymentForm.controls.recipient.touched && paymentForm.controls.recipient.invalid">
+              Please select a recipient.
+            </mat-error>
+          </mat-form-field>
+          <div *ngIf="paymentForm.value.recipient === 'add'">
+            <mat-form-field appearance="outline">
+              <mat-label>Account Number</mat-label>
+              <input matInput formControlName="newAccount" inputmode="numeric">
+              <mat-error *ngIf="paymentForm.controls.newAccount.touched && paymentForm.controls.newAccount.invalid">
+                Enter a 10-digit account number.
+              </mat-error>
+            </mat-form-field>
+            <mat-form-field appearance="outline">
+              <mat-label>Contact Label (Optional)</mat-label>
+              <input matInput formControlName="newLabel">
+            </mat-form-field>
+          </div>
+          <mat-form-field appearance="outline">
+            <mat-label>Transaction Amount</mat-label>
+            <input matInput type="number" step="0.01" min="0.01" [max]="(balance || 0) / 100" formControlName="amount">
+            <mat-error *ngIf="paymentForm.controls.amount.touched && paymentForm.controls.amount.invalid">
+              Enter a positive transaction amount.
+            </mat-error>
+          </mat-form-field>
+          <button mat-raised-button color="primary" type="submit" [disabled]="submitting">
+            <mat-spinner *ngIf="submitting" class="button-spinner" diameter="20" aria-label="Processing transaction"></mat-spinner>
+            <span>Send Payment</span>
+          </button>
+        </form>
+      </mat-card-content>
     </mat-card>
   </section>
   <mat-card class="history-card">

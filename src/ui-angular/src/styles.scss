@@ -40,7 +40,17 @@ body {
 .alert-info { background: #e3f2fd; color: #0d47a1; }
 .muted { color: #607d8b; }
 .balance { color: #3f51b5; font-size: 2.4rem; font-weight: 400; }
-.button-spinner { display: inline-block; margin-right: .5rem; vertical-align: middle; }
+.transaction-forms .mat-raised-button .mat-button-wrapper {
+  align-items: center;
+  display: inline-flex;
+  gap: .5rem;
+  justify-content: center;
+}
+.button-spinner {
+  flex: 0 0 20px;
+  height: 20px !important;
+  width: 20px !important;
+}
 .table-wrap { overflow-x: auto; }
 table { min-width: 600px; width: 100%; }
 .credit { color: #2e7d32; }
