@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ui-angular
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ui-angular
+  template:
+    metadata:
+      labels:
+        app: ui-angular
+    spec:
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        fsGroup: 101
+        runAsGroup: 101
+        runAsNonRoot: true
+        runAsUser: 101
+      containers:
+      - name: ui-angular
+        image: ui-angular
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: [all]
+          readOnlyRootFilesystem: true
+        ports:
+        - name: http
+          containerPort: 8080
+        env:
+        - name: VERSION
+          value: "dev"
+        envFrom:
+        - configMapRef:
+            name: environment-config
+        - configMapRef:
+            name: service-api-config
+        - configMapRef:
+            name: demo-data-config
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 2
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 15
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 250m
+            memory: 128Mi
+        volumeMounts:
+        - name: nginx-cache
+          mountPath: /var/cache/nginx
+        - name: nginx-run
+          mountPath: /var/run
+        - name: nginx-tmp
+          mountPath: /tmp
+        - name: nginx-conf
+          mountPath: /etc/nginx/conf.d
+      volumes:
+      - name: nginx-cache
+        emptyDir: {}
+      - name: nginx-run
+        emptyDir: {}
+      - name: nginx-tmp
+        emptyDir: {}
+      - name: nginx-conf
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui-angular
+spec:
+  type: ClusterIP
+  selector:
+    app: ui-angular
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080

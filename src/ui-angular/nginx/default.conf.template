@@ -1,0 +1,45 @@
+server {
+    listen 8080;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location = /ready {
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location = /version {
+        default_type text/plain;
+        return 200 "${VERSION}\n";
+    }
+
+    location = /config.json {
+        default_type application/json;
+        return 200 '{"demoUsername":"${DEMO_LOGIN_USERNAME}","demoPassword":"${DEMO_LOGIN_PASSWORD}","localRouting":"${LOCAL_ROUTING_NUM}"}';
+    }
+
+    location /api/userservice/ {
+        proxy_pass http://${USERSERVICE_API_ADDR}/;
+    }
+
+    location /api/balancereader/ {
+        proxy_pass http://${BALANCES_API_ADDR}/;
+    }
+
+    location /api/transactionhistory/ {
+        proxy_pass http://${HISTORY_API_ADDR}/;
+    }
+
+    location /api/contacts/ {
+        proxy_pass http://${CONTACTS_API_ADDR}/;
+    }
+
+    location /api/ledgerwriter/ {
+        proxy_pass http://${TRANSACTIONS_API_ADDR}/;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
