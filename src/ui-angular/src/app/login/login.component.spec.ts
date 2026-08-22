@@ -17,6 +17,8 @@ describe('LoginComponent', () => {
   };
 
   beforeEach(async () => {
+    config.demoUsername = 'testuser';
+    config.demoPassword = 'bankofanthos';
     auth = jasmine.createSpyObj<AuthService>('AuthService', ['login']);
     await TestBed.configureTestingModule({
       imports: [ReactiveFormsModule, RouterTestingModule],

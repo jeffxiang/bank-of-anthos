@@ -24,7 +24,9 @@ export class ApiService {
       headers: new HttpHeaders({ 'Content-Type': 'application/x-www-form-urlencoded' })
     });
   }
-  transaction(payload: object): Observable<unknown> {
-    return this.http.post('/api/ledgerwriter/transactions', payload);
+  transaction(payload: object): Observable<string> {
+    return this.http.post('/api/ledgerwriter/transactions', payload, {
+      responseType: 'text'
+    });
   }
 }

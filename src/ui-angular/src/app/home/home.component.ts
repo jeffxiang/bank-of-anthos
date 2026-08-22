@@ -1,7 +1,7 @@
 import { Component, OnInit } from '@angular/core';
 import { FormBuilder, Validators } from '@angular/forms';
 import { Router } from '@angular/router';
-import { forkJoin, of } from 'rxjs';
+import { forkJoin, Observable, of, timer } from 'rxjs';
 import { switchMap } from 'rxjs/operators';
 import { ApiService } from '../api.service';
 import { AuthService } from '../auth/auth.service';
@@ -50,21 +50,51 @@ export class HomeComponent implements OnInit {
     if (!claims) return;
     this.accountId = claims.acct;
     this.displayName = claims.name;
-    forkJoin({
+    this.loadAccountData();
+  }
+
+  private loadAccountData(): void {
+    this.accountDataRequest().subscribe({
+      next: data => this.applyAccountData(data),
+      error: () => this.error = 'Unable to load account data'
+    });
+  }
+
+  private refreshAccountData(): void {
+    timer(250).pipe(
+      switchMap(() => this.accountDataRequest())
+    ).subscribe({
+      next: data => this.applyAccountData(data),
+      error: () => this.error = 'Unable to load account data'
+    });
+  }
+
+  private accountDataRequest(): Observable<{
+    balance: number;
+    transactions: Transaction[];
+    contacts: Contact[];
+  } | null> {
+    const claims = this.auth.claims;
+    if (!claims) return of(null);
+    return forkJoin({
       balance: this.api.balance(this.accountId),
       transactions: this.api.transactions(this.accountId),
       contacts: this.api.contacts(claims.user)
-    }).subscribe({
-      next: data => {
-        this.balance = data.balance;
-        this.transactions = data.transactions || [];
-        this.contacts = data.contacts || [];
-        this.paymentForm.patchValue({ recipient: this.paymentRecipients[0]?.account_num || 'add' });
-        this.depositForm.patchValue({
-          account: this.depositAccounts[0] ? this.externalValue(this.depositAccounts[0]) : 'add'
-        });
-      },
-      error: () => this.error = 'Unable to load account data'
+    });
+  }
+
+  private applyAccountData(data: {
+    balance: number;
+    transactions: Transaction[];
+    contacts: Contact[];
+  } | null): void {
+    if (!data) return;
+    this.balance = data.balance;
+    this.transactions = data.transactions || [];
+    this.contacts = data.contacts || [];
+    this.paymentForm.patchValue({ recipient: this.paymentRecipients[0]?.account_num || 'add' });
+    this.depositForm.patchValue({
+      account: this.depositAccounts[0] ? this.externalValue(this.depositAccounts[0]) : 'add'
     });
   }
 
@@ -110,8 +140,9 @@ export class HomeComponent implements OnInit {
       next: () => {
         this.message = 'Payment successful';
         this.paymentForm.reset();
+        this.refreshAccountData();
       },
-      error: response => this.error = `Payment failed: ${response?.error || ''}`
+      error: response => this.error = `Payment failed: ${this.errorMessage(response)}`
     });
   }
 
@@ -143,9 +174,21 @@ export class HomeComponent implements OnInit {
       next: () => {
         this.message = 'Deposit successful';
         this.depositForm.reset();
+        this.refreshAccountData();
       },
-      error: response => this.error = `Deposit failed: ${response?.error || ''}`
+      error: response => this.error = `Deposit failed: ${this.errorMessage(response)}`
     });
+  }
+
+  private errorMessage(response: { error?: unknown; status?: number }): string {
+    const error = response?.error;
+    if (typeof error === 'string' && error.trim()) return error;
+    if (error && typeof error === 'object') {
+      const body = error as { message?: unknown; error?: unknown };
+      if (typeof body.message === 'string' && body.message.trim()) return body.message;
+      if (typeof body.error === 'string' && body.error.trim()) return body.error;
+    }
+    return response?.status !== undefined ? `HTTP ${response.status}` : 'Unknown error';
   }
 
   private paymentContact(): Contact | null {
