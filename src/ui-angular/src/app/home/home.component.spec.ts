@@ -4,7 +4,7 @@ import { CommonModule } from '@angular/common';
 import { ReactiveFormsModule } from '@angular/forms';
 import { RouterTestingModule } from '@angular/router/testing';
 import { Router } from '@angular/router';
-import { of, throwError } from 'rxjs';
+import { of, Subject, throwError } from 'rxjs';
 import { HomeComponent } from './home.component';
 import { ApiService } from '../api.service';
 import { AuthService } from '../auth/auth.service';
@@ -88,14 +88,75 @@ describe('HomeComponent', () => {
     expect(component.error).toBe('Payment failed: Insufficient balance');
   });
 
+  it('falls back to the HTTP status for HTML and oversized payment errors', () => {
+    api.transaction.and.returnValue(throwError(() => ({
+      error: '<!DOCTYPE html><html><body>504 Gateway Time-out</body></html>',
+      status: 504
+    })));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    expect(component.error).toBe('Payment failed: HTTP 504');
+
+    api.transaction.and.returnValue(throwError(() => ({
+      error: 'x'.repeat(201),
+      status: 502
+    })));
+    component.submitPayment();
+    expect(component.error).toBe('Payment failed: HTTP 502');
+  });
+
+  it('falls back to the HTTP status for HTML and oversized structured errors', () => {
+    api.transaction.and.returnValue(throwError(() => ({
+      error: { message: '<html>504 Gateway Time-out</html>' },
+      status: 504
+    })));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    expect(component.error).toBe('Payment failed: HTTP 504');
+
+    api.transaction.and.returnValue(throwError(() => ({
+      error: { error: 'x'.repeat(201) },
+      status: 502
+    })));
+    component.submitPayment();
+    expect(component.error).toBe('Payment failed: HTTP 502');
+  });
+
+  it('sets submitting while payment is in flight and clears it on success', () => {
+    const response = new Subject<string>();
+    api.transaction.and.returnValue(response);
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    expect(component.submitting).toBeTrue();
+    response.next('ok');
+    response.complete();
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('clears submitting and shows an error when payment fails', () => {
+    const response = new Subject<string>();
+    api.transaction.and.returnValue(response);
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    expect(component.submitting).toBeTrue();
+    response.error({ error: { message: 'Service unavailable' }, status: 503 });
+    expect(component.submitting).toBeFalse();
+    expect(component.error).toBe('Payment failed: Service unavailable');
+  });
+
   it('refreshes account data after a successful deposit', fakeAsync(() => {
-    api.transaction.and.returnValue(of('ok'));
+    const response = new Subject<string>();
+    api.transaction.and.returnValue(response);
     component.depositForm.patchValue({
       account: 'add', newAccount: '1234567890', newRouting: '123456789', amount: '12.34'
     });
     component.submitDeposit();
+    expect(component.submitting).toBeTrue();
+    response.next('ok');
+    response.complete();
     tick(250);
     expect(component.message).toBe('Deposit successful');
+    expect(component.submitting).toBeFalse();
     expect(api.balance).toHaveBeenCalledTimes(2);
     expect(api.transactions).toHaveBeenCalledTimes(2);
     expect(api.contacts).toHaveBeenCalledTimes(2);

@@ -2,7 +2,7 @@ import { Component, OnInit } from '@angular/core';
 import { FormBuilder, Validators } from '@angular/forms';
 import { Router } from '@angular/router';
 import { forkJoin, Observable, of, timer } from 'rxjs';
-import { switchMap } from 'rxjs/operators';
+import { finalize, switchMap } from 'rxjs/operators';
 import { ApiService } from '../api.service';
 import { AuthService } from '../auth/auth.service';
 import { Contact, Transaction } from '../models';
@@ -22,6 +22,7 @@ export class HomeComponent implements OnInit {
   contacts: Contact[] = [];
   message = '';
   error = '';
+  submitting = false;
   paymentForm = this.fb.group({
     recipient: ['', Validators.required],
     newAccount: ['', Validators.pattern(/^[0-9]{10}$/)],
@@ -114,6 +115,7 @@ export class HomeComponent implements OnInit {
   }
 
   submitPayment(): void {
+    if (this.submitting) return;
     this.error = '';
     this.message = '';
     if (this.paymentForm.invalid || Number(this.paymentForm.value.amount) <= 0) {
@@ -125,6 +127,7 @@ export class HomeComponent implements OnInit {
       this.error = 'Please select a recipient';
       return;
     }
+    this.submitting = true;
     const addContact = this.paymentForm.value.recipient === 'add'
       ? this.api.addContact(this.username, {
         label: this.paymentForm.value.newLabel || this.paymentForm.value.newAccount!,
@@ -135,7 +138,8 @@ export class HomeComponent implements OnInit {
       : of({});
     addContact.pipe(
       switchMap(() => this.api.transaction(
-        this.tx.payment(this.accountId, recipient, `${this.paymentForm.value.amount}`)))
+        this.tx.payment(this.accountId, recipient, `${this.paymentForm.value.amount}`))),
+      finalize(() => this.submitting = false)
     ).subscribe({
       next: () => {
         this.message = 'Payment successful';
@@ -147,6 +151,7 @@ export class HomeComponent implements OnInit {
   }
 
   submitDeposit(): void {
+    if (this.submitting) return;
     this.error = '';
     this.message = '';
     if (this.depositForm.invalid || Number(this.depositForm.value.amount) <= 0) {
@@ -159,6 +164,7 @@ export class HomeComponent implements OnInit {
       this.error = 'Invalid routing number';
       return;
     }
+    this.submitting = true;
     const addContact = this.depositForm.value.account === 'add'
       ? this.api.addContact(this.username, {
         label: this.depositForm.value.newLabel || this.depositForm.value.newAccount!,
@@ -169,7 +175,8 @@ export class HomeComponent implements OnInit {
       : of({});
     addContact.pipe(
       switchMap(() => this.api.transaction(
-        this.tx.deposit(this.accountId, external, `${this.depositForm.value.amount}`)))
+        this.tx.deposit(this.accountId, external, `${this.depositForm.value.amount}`))),
+      finalize(() => this.submitting = false)
     ).subscribe({
       next: () => {
         this.message = 'Deposit successful';
@@ -182,13 +189,23 @@ export class HomeComponent implements OnInit {
 
   private errorMessage(response: { error?: unknown; status?: number }): string {
     const error = response?.error;
-    if (typeof error === 'string' && error.trim()) return error;
+    const message = this.usefulMessage(error);
+    if (message) return message;
     if (error && typeof error === 'object') {
       const body = error as { message?: unknown; error?: unknown };
-      if (typeof body.message === 'string' && body.message.trim()) return body.message;
-      if (typeof body.error === 'string' && body.error.trim()) return body.error;
+      return this.usefulMessage(body.message) || this.usefulMessage(body.error) ||
+        (response?.status !== undefined ? `HTTP ${response.status}` : 'Unknown error');
     }
     return response?.status !== undefined ? `HTTP ${response.status}` : 'Unknown error';
+  }
+
+  private usefulMessage(value: unknown): string {
+    if (typeof value !== 'string') return '';
+    const message = value.trim();
+    return message && message.length <= 200 && !message.startsWith('<') &&
+      !/<\/?[a-z][^>]*>|<!doctype\b/i.test(message)
+      ? message
+      : '';
   }
 
   private paymentContact(): Contact | null {
