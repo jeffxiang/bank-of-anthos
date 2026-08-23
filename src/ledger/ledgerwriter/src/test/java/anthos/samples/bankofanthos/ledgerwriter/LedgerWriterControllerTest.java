@@ -21,9 +21,12 @@ import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTI
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.mockito.Mockito.contains;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.initMocks;
 
@@ -64,6 +67,8 @@ class LedgerWriterControllerTest {
     private Claim claim;
     @Mock
     private Clock clock;
+    @Mock
+    private SlackNotifier slackNotifier;
 
     private static final String VERSION = "v0.1.0";
     private static final String LOCAL_ROUTING_NUM = "123456789";
@@ -102,6 +107,7 @@ class LedgerWriterControllerTest {
                 meterRegistry,
                 transactionRepository, transactionValidator,
                 LOCAL_ROUTING_NUM, BALANCES_API_ADDR, VERSION);
+        ledgerWriterController.slackNotifier = slackNotifier;
 
         when(verifier.verify(TOKEN)).thenReturn(jwt);
         when(jwt.getClaim(
@@ -151,6 +157,7 @@ class LedgerWriterControllerTest {
         assertEquals(ledgerWriterController.READINESS_CODE,
                 actualResult.getBody());
         assertEquals(HttpStatus.CREATED, actualResult.getStatusCode());
+        verifyNoInteractions(slackNotifier);
     }
 
     @Test
@@ -233,6 +240,8 @@ class LedgerWriterControllerTest {
                 EXCEPTION_MESSAGE_INSUFFICIENT_BALANCE,
                 actualResult.getBody());
         assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_INSUFFICIENT_BALANCE));
     }
 
     @Test
@@ -253,6 +262,7 @@ class LedgerWriterControllerTest {
         assertEquals(ledgerWriterController.UNAUTHORIZED_CODE,
                 actualResult.getBody());
         assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        verify(slackNotifier).notifyError(contains("not authorized"));
     }
 
     @Test
@@ -274,6 +284,7 @@ class LedgerWriterControllerTest {
         assertEquals(EXCEPTION_MESSAGE,
                 actualResult.getBody());
         assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
+        verify(slackNotifier).notifyError(contains(EXCEPTION_MESSAGE));
     }
 
     @Test
@@ -316,6 +327,7 @@ class LedgerWriterControllerTest {
         assertEquals(EXCEPTION_MESSAGE, actualResult.getBody());
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR,
                 actualResult.getStatusCode());
+        verify(slackNotifier).notifyError(contains(EXCEPTION_MESSAGE));
     }
 
     @Test

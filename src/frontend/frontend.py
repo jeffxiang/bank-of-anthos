@@ -200,6 +200,26 @@ def create_app():
             elif trans['fromAccountNum'] == account_id:
                 trans['accountLabel'] = contact_map.get(trans['toAccountNum'])
 
+    def _notify_slack(message):
+        """
+        Posts an error message to the configured Slack incoming webhook.
+
+        No-ops when SLACK_WEBHOOK_URL is unset. Slack failures are logged and
+        never propagated to the caller.
+        """
+        webhook_url = app.config['SLACK_WEBHOOK_URL']
+        if not webhook_url:
+            return
+        payload = {'text': '[frontend] {}'.format(message)}
+        if app.config['SLACK_CHANNEL']:
+            payload['channel'] = app.config['SLACK_CHANNEL']
+        try:
+            requests.post(url=webhook_url,
+                          json=payload,
+                          timeout=app.config['SLACK_TIMEOUT'])
+        except requests.exceptions.RequestException as slack_err:
+            app.logger.warning('Failed to send Slack notification: %s', str(slack_err))
+
     @app.route('/payment', methods=['POST'])
     def payment():
         """
@@ -246,8 +266,10 @@ def create_app():
 
         except requests.exceptions.RequestException as err:
             app.logger.error('Error submitting payment: %s', str(err))
+            _notify_slack('/payment failed: {}'.format(str(err)))
         except UserWarning as warn:
             app.logger.error('Error submitting payment: %s', str(warn))
+            _notify_slack('/payment failed: {}'.format(str(warn)))
             msg = 'Payment failed: {}'.format(str(warn))
             return redirect(url_for('home',
                                     msg=msg,
@@ -255,6 +277,7 @@ def create_app():
                                     _scheme=app.config['SCHEME']))
         except (ValueError, DecimalException) as num_err:
             app.logger.error('Error submitting payment: %s', str(num_err))
+            _notify_slack('/payment failed: {}'.format(str(num_err)))
             msg = 'Payment failed: {} is not a valid number'.format(user_input)
 
         return redirect(url_for('home',
@@ -313,8 +336,10 @@ def create_app():
 
         except requests.exceptions.RequestException as err:
             app.logger.error('Error submitting deposit: %s', str(err))
+            _notify_slack('/deposit failed: {}'.format(str(err)))
         except UserWarning as warn:
             app.logger.error('Error submitting deposit: %s', str(warn))
+            _notify_slack('/deposit failed: {}'.format(str(warn)))
             msg = 'Deposit failed: {}'.format(str(warn))
             return redirect(url_for('home',
                                     msg=msg,
@@ -471,6 +496,7 @@ def create_app():
             return resp
         except (RequestException, HTTPError) as err:
             app.logger.error('Error logging in: %s', str(err))
+            _notify_slack('/login failed: {}'.format(str(err)))
         return redirect(url_for('login',
                                 msg='Login Failed',
                                 _external=True,
@@ -548,9 +574,12 @@ def create_app():
                 return make_response(redirect(location, 302))
 
             app.logger.error('Unexpected response status: %s', callback_response.status_code)
+            _notify_slack('/consent failed: unexpected response status {}'.format(
+                callback_response.status_code))
             return make_response(redirect(redirect_uri + '#error=server_error', 302))
         except requests.exceptions.RequestException as err:
             app.logger.error('Error retrieving auth code: %s', str(err))
+            _notify_slack('/consent failed: {}'.format(str(err)))
         return make_response(redirect(redirect_uri + '#error=server_error', 302))
 
     @app.route("/signup", methods=['GET'])
@@ -595,6 +624,7 @@ def create_app():
                                      request.args)
         except requests.exceptions.RequestException as err:
             app.logger.error('Error creating new user: %s', str(err))
+            _notify_slack('/signup failed: {}'.format(str(err)))
         return redirect(url_for('login',
                                 msg='Error: Account creation failed',
                                 _external=True,
@@ -679,6 +709,11 @@ def create_app():
     app.config['CONSENT_COOKIE'] = 'consented'
     app.config['TIMESTAMP_FORMAT'] = '%Y-%m-%dT%H:%M:%S.%f%z'
     app.config['SCHEME'] = os.environ.get('SCHEME', 'http')
+    # Slack incoming webhook used to report errors. Notifications are disabled
+    # when unset.
+    app.config['SLACK_WEBHOOK_URL'] = os.getenv('SLACK_WEBHOOK_URL', '')
+    app.config['SLACK_CHANNEL'] = os.getenv('SLACK_CHANNEL', '')
+    app.config['SLACK_TIMEOUT'] = int(os.getenv('SLACK_TIMEOUT', '3'))
 
     # where am I?
     metadata_server = os.getenv('METADATA_SERVER', 'metadata.google.internal')

@@ -24,6 +24,7 @@ import re
 import sys
 
 import jwt
+import requests
 from flask import Flask, jsonify, request
 import bleach
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
@@ -61,6 +62,25 @@ def create_app():
         """Readiness probe."""
         return "ok", 200
 
+    def _notify_slack(message):
+        """Post an error message to the configured Slack incoming webhook.
+
+        No-ops when SLACK_WEBHOOK_URL is unset. Slack failures are logged and
+        never propagated to the caller.
+        """
+        webhook_url = app.config["SLACK_WEBHOOK_URL"]
+        if not webhook_url:
+            return
+        payload = {"text": "[contacts] {}".format(message)}
+        if app.config["SLACK_CHANNEL"]:
+            payload["channel"] = app.config["SLACK_CHANNEL"]
+        try:
+            requests.post(url=webhook_url,
+                          json=payload,
+                          timeout=app.config["SLACK_TIMEOUT"])
+        except requests.exceptions.RequestException as slack_err:
+            app.logger.warning("Failed to send Slack notification: %s", str(slack_err))
+
     @app.route("/contacts/<username>", methods=["GET"])
     def get_contacts(username):
         """Retrieve the contacts list for the authenticated user.
@@ -85,9 +105,11 @@ def create_app():
             return jsonify(contacts_list), 200
         except (PermissionError, jwt.exceptions.InvalidTokenError) as err:
             app.logger.error("Error retrieving contacts list: %s", str(err))
+            _notify_slack("GET /contacts failed: {}".format(str(err)))
             return "authentication denied", 401
         except SQLAlchemyError as err:
             app.logger.error("Error retrieving contacts list: %s", str(err))
+            _notify_slack("GET /contacts failed: {}".format(str(err)))
             return "failed to retrieve contacts list", 500
 
     @app.route("/contacts/<username>", methods=["POST"])
@@ -137,15 +159,19 @@ def create_app():
 
         except (PermissionError, jwt.exceptions.InvalidTokenError) as err:
             app.logger.error("Error adding contact: %s", str(err))
+            _notify_slack("POST /contacts failed: {}".format(str(err)))
             return "authentication denied", 401
         except UserWarning as warn:
             app.logger.error("Error adding contact: %s", str(warn))
+            _notify_slack("POST /contacts failed: {}".format(str(warn)))
             return str(warn), 400
         except ValueError as err:
             app.logger.error("Error adding contact: %s", str(err))
+            _notify_slack("POST /contacts failed: {}".format(str(err)))
             return str(err), 409
         except SQLAlchemyError as err:
             app.logger.error("Error adding contact: %s", str(err))
+            _notify_slack("POST /contacts failed: {}".format(str(err)))
             return "failed to add contact", 500
 
     def _validate_new_contact(req):
@@ -214,6 +240,11 @@ def create_app():
     app.config["VERSION"] = os.environ.get("VERSION")
     app.config["LOCAL_ROUTING"] = os.environ.get("LOCAL_ROUTING_NUM")
     app.config["PUBLIC_KEY"] = open(os.environ.get("PUB_KEY_PATH"), "r").read()
+    # Slack incoming webhook used to report errors. Notifications are disabled
+    # when unset.
+    app.config["SLACK_WEBHOOK_URL"] = os.getenv("SLACK_WEBHOOK_URL", "")
+    app.config["SLACK_CHANNEL"] = os.getenv("SLACK_CHANNEL", "")
+    app.config["SLACK_TIMEOUT"] = int(os.getenv("SLACK_TIMEOUT", "3"))
 
     # Configure database connection
     try:

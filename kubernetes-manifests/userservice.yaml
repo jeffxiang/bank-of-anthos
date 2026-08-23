@@ -76,6 +76,12 @@ spec:
               value: /tmp/.ssh/privatekey
             - name: LOG_LEVEL
               value: info
+            - name: SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  key: webhookURL
+                  name: app-slack-webhook
+                  optional: true
           envFrom:
             - configMapRef:
                 name: environment-config

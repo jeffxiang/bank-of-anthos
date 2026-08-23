@@ -71,6 +71,9 @@ public final class LedgerWriterController {
     @Autowired
     RestTemplate restTemplate;
 
+    @Autowired
+    SlackNotifier slackNotifier;
+
     /**
     * Constructor.
     *
@@ -178,17 +181,23 @@ public final class LedgerWriterController {
         } catch (JWTVerificationException e) {
             LOGGER.error("Failed to submit transaction: "
                 + "not authorized");
+            slackNotifier.notifyError("/transactions failed: not authorized: "
+                + e.getMessage());
             return new ResponseEntity<>(UNAUTHORIZED_CODE,
                                               HttpStatus.UNAUTHORIZED);
         } catch (IllegalArgumentException | IllegalStateException e) {
             LOGGER.error("Failed to retrieve account balance: "
                 + "bad request");
+            slackNotifier.notifyError("/transactions failed: bad request: "
+                + e.getMessage());
             return new ResponseEntity<>(e.getMessage(),
                                               HttpStatus.BAD_REQUEST);
         } catch (ResourceAccessException
                 | CannotCreateTransactionException
                 | HttpServerErrorException e) {
             LOGGER.error("Failed to retrieve account balance");
+            slackNotifier.notifyError("/transactions failed: "
+                + e.getMessage());
             return new ResponseEntity<>(e.getMessage(),
                                               HttpStatus.INTERNAL_SERVER_ERROR);
         }

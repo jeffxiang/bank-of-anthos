@@ -22,6 +22,7 @@ import unittest
 import json
 from unittest.mock import patch, mock_open
 
+from requests.exceptions import RequestException
 from sqlalchemy.exc import SQLAlchemyError
 
 from contacts.contacts import create_app
@@ -34,6 +35,8 @@ from contacts.tests.constants import (
     INVALID_ACCOUNT_NUMS,
     INVALID_LABELS,
     INVALID_ROUTING_NUMS,
+    SLACK_CHANNEL,
+    SLACK_WEBHOOK_URL,
 )
 
 def create_new_contact(**kwargs):
@@ -330,3 +333,42 @@ class TestContacts(unittest.TestCase):
         self.assertEqual(
             response.data, b"failed to retrieve contacts list"
         )
+
+    @patch("contacts.contacts.requests.post")
+    def test_slack_notification_sent_on_error(self, mock_post):
+        """test a Slack notification is posted when a request fails"""
+        self.flask_app.config["SLACK_WEBHOOK_URL"] = SLACK_WEBHOOK_URL
+        self.flask_app.config["SLACK_CHANNEL"] = SLACK_CHANNEL
+        self.mocked_db.return_value.get_contacts.side_effect = SQLAlchemyError()
+        response = self.test_app.get(
+            "/contacts/{}".format(EXAMPLE_USER), headers=EXAMPLE_HEADERS
+        )
+        # assert behavior on failure is unchanged
+        self.assertEqual(response.status_code, 500)
+        # assert the webhook was called with the endpoint and channel
+        self.assertEqual(mock_post.call_args.kwargs["url"], SLACK_WEBHOOK_URL)
+        payload = mock_post.call_args.kwargs["json"]
+        self.assertEqual(payload["channel"], SLACK_CHANNEL)
+        self.assertIn("[contacts] GET /contacts failed", payload["text"])
+
+    @patch("contacts.contacts.requests.post")
+    def test_no_slack_notification_when_webhook_unset(self, mock_post):
+        """test no Slack notification is sent when no webhook is configured"""
+        self.mocked_db.return_value.get_contacts.side_effect = SQLAlchemyError()
+        response = self.test_app.get(
+            "/contacts/{}".format(EXAMPLE_USER), headers=EXAMPLE_HEADERS
+        )
+        self.assertEqual(response.status_code, 500)
+        mock_post.assert_not_called()
+
+    @patch("contacts.contacts.requests.post",
+           side_effect=RequestException("slack down"))
+    def test_slack_failure_does_not_affect_response(self, _mock_post):
+        """test a failing Slack webhook does not change the error response"""
+        self.flask_app.config["SLACK_WEBHOOK_URL"] = SLACK_WEBHOOK_URL
+        self.mocked_db.return_value.get_contacts.side_effect = SQLAlchemyError()
+        response = self.test_app.get(
+            "/contacts/{}".format(EXAMPLE_USER), headers=EXAMPLE_HEADERS
+        )
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data, b"failed to retrieve contacts list")

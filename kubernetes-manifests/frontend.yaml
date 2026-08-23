@@ -74,6 +74,12 @@ spec:
               value: http
             - name: LOG_LEVEL
               value: info
+            - name: SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  key: webhookURL
+                  name: app-slack-webhook
+                  optional: true
             - name: DEFAULT_USERNAME
               valueFrom:
                 configMapKeyRef:
