@@ -1,0 +1,41 @@
+:host {
+  display: inline-block;
+}
+
+.brand-logo {
+  align-items: center;
+  display: inline-flex;
+  gap: .55rem;
+  white-space: nowrap;
+}
+
+.brand-mark {
+  flex: 0 0 31px;
+  height: 25px;
+  width: 31px;
+}
+
+.brand-wordmark {
+  color: #012169;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: .13em;
+}
+
+.brand-stripe-red {
+  fill: #E31837;
+}
+
+.brand-stripe-navy {
+  fill: #012169;
+}
+
+.brand-logo-small .brand-mark {
+  flex-basis: 25px;
+  height: 20px;
+  width: 25px;
+}
+
+.brand-logo-small .brand-wordmark {
+  font-size: .95rem;
+}
