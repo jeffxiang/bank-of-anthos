@@ -1,6 +1,6 @@
 # Angular frontend
 
-This directory contains the Angular 14 single-page frontend for Bank of Anthos.
+This directory contains the Angular 14 single-page frontend for Bank of America.
 It runs alongside the existing Flask frontend and uses nginx to serve the
 bundle and proxy backend API requests through one browser origin.
 
