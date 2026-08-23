@@ -29,6 +29,8 @@ import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.
         EXCEPTION_MESSAGE_SEND_TO_SELF;
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.
         EXCEPTION_MESSAGE_INVALID_AMOUNT;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.
+        EXCEPTION_MESSAGE_RECIPIENT_SCREENED;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.initMocks;
@@ -88,7 +90,7 @@ class TransactionValidatorTest {
     @BeforeEach
     void setUp() {
         initMocks(this);
-        transactionValidator = new TransactionValidator();
+        transactionValidator = new TransactionValidator("");
 
         when(transaction.getFromAccountNum()).thenReturn(AUTHED_ACCOUNT_NUM);
         when(transaction.getFromRoutingNum()).thenReturn(LOCAL_ROUTING_NUM);
@@ -225,6 +227,41 @@ class TransactionValidatorTest {
             assertEquals(EXCEPTION_MESSAGE_INVALID_AMOUNT,
                 exceptionThrown.getMessage());
         }
+    }
+
+    @Test
+    @DisplayName("Given the receiver is a screened account, "
+            + "IllegalArgumentException is thrown")
+    void validateTransactionFailWhenReceiverIsScreened() {
+        // Given
+        transactionValidator = new TransactionValidator(
+                "1111111111, " + TO_ACCOUNT_NUM);
+
+        // When
+        IllegalArgumentException exceptionThrown = assertThrows(
+                IllegalArgumentException.class, () -> {
+                    transactionValidator.validateTransaction(
+                            LOCAL_ROUTING_NUM, AUTHED_ACCOUNT_NUM, transaction);
+                });
+
+        // Then
+        assertNotNull(exceptionThrown);
+        assertEquals(EXCEPTION_MESSAGE_RECIPIENT_SCREENED,
+                exceptionThrown.getMessage());
+    }
+
+    @Test
+    @DisplayName("Given no screened accounts are configured, "
+            + "no exception is thrown")
+    void validateTransactionSuccessWhenScreeningNotConfigured() {
+        // Given
+        transactionValidator = new TransactionValidator(null);
+
+        // Then
+        assertDoesNotThrow(() -> {
+            transactionValidator.validateTransaction(
+                LOCAL_ROUTING_NUM, AUTHED_ACCOUNT_NUM, transaction);
+        });
     }
 
     void assertInvalidNumberHelper() {

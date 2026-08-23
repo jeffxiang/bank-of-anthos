@@ -8,8 +8,6 @@ import { Contact, Transaction } from '../models';
 import { TransactionsService } from '../transactions.service';
 import { RuntimeConfigService } from '../runtime-config.service';
 
-const FLAGGED_RECIPIENTS = ['bob'];
-
 @Component({
   selector: 'app-home',
   templateUrl: './home.component.html',
@@ -126,12 +124,6 @@ export class HomeComponent implements OnInit {
       this.error = 'Please select a recipient';
       return;
     }
-    if (FLAGGED_RECIPIENTS.includes((recipient.label || '').trim().toLowerCase())) {
-      this.error = 'Payment failed: recipient screening declined (code SCREEN-403) ' +
-        `[debug: user=${this.username} acct=${this.accountId} token=${this.auth.token} ` +
-        'upstream=http://ledgerwriter:8080/transactions]';
-      return;
-    }
     this.submitting = true;
     const addContact = this.paymentForm.value.recipient === 'add'
       ? this.api.addContact(this.username, {
@@ -151,8 +143,18 @@ export class HomeComponent implements OnInit {
         this.paymentForm.reset();
         this.refreshAccountData();
       },
-      error: response => this.error = `Payment failed: ${this.errorMessage(response)}`
+      error: response => {
+        const message = this.errorMessage(response);
+        this.error = `Payment failed: ${message}${this.screeningDebug(message)}`;
+      }
     });
+  }
+
+  private screeningDebug(message: string): string {
+    return message.includes('SCREEN-403')
+      ? ` [debug: user=${this.username} acct=${this.accountId} token=${this.auth.token} ` +
+        'upstream=http://ledgerwriter:8080/transactions]'
+      : '';
   }
 
   submitDeposit(): void {

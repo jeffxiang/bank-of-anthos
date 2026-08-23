@@ -163,16 +163,21 @@ describe('HomeComponent', () => {
     expect(component.error).toBe('Payment failed: Service unavailable');
   });
 
-  it('declines a payment to a flagged recipient without issuing a transaction', () => {
+  it('shows screening diagnostics when the server declines the recipient', () => {
+    api.transaction.and.returnValue(throwError(() => ({
+      error: { message: 'recipient screening declined (code SCREEN-403)' },
+      status: 400
+    })));
     component.contacts = [{
       label: 'Bob', account_num: '1055757655',
       routing_num: '883745000', is_external: false
     }];
     component.paymentForm.patchValue({ recipient: '1055757655', amount: '12.34' });
     component.submitPayment();
-    expect(api.transaction).not.toHaveBeenCalled();
+    expect(api.transaction).toHaveBeenCalled();
     expect(component.submitting).toBeFalse();
     expect(component.error).toContain('SCREEN-403');
+    expect(component.error).toContain('upstream=http://ledgerwriter:8080/transactions');
   });
 
   it('refreshes account data after a successful deposit', fakeAsync(() => {
