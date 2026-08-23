@@ -26,6 +26,7 @@ import static org.mockito.MockitoAnnotations.initMocks;
 
 import java.lang.reflect.Field;
 import java.util.Collections;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -230,7 +231,7 @@ class LedgerReaderTest {
 
     private void awaitNotAlive() throws InterruptedException {
         long deadline = System.nanoTime()
-            + java.util.concurrent.TimeUnit.SECONDS.toNanos(3);
+            + TimeUnit.SECONDS.toNanos(3);
         while (ledgerReader.isAlive() && System.nanoTime() < deadline) {
             Thread.sleep(5);
         }

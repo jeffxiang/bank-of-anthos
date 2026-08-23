@@ -18,6 +18,9 @@ package anthos.samples.bankofanthos.transactionhistory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.initMocks;
@@ -33,6 +36,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.web.client.ResourceAccessException;
 
@@ -55,8 +59,7 @@ class TransactionCacheTest {
         // Given
         LinkedList<Transaction> expected = new LinkedList<>();
         when(dbRepo.findForAccount(
-            "account", "routing", org.springframework.data.domain.PageRequest
-                .of(0, 25))).thenReturn(expected);
+            "account", "routing", PageRequest.of(0, 25))).thenReturn(expected);
         LoadingCache<String, Deque<Transaction>> cache =
             transactionCache.initializeCache(10, 60, "routing", 25);
 
@@ -68,8 +71,7 @@ class TransactionCacheTest {
         ArgumentCaptor<Pageable> pageCaptor =
             ArgumentCaptor.forClass(Pageable.class);
         verify(dbRepo).findForAccount(
-            org.mockito.ArgumentMatchers.eq("account"),
-            org.mockito.ArgumentMatchers.eq("routing"), pageCaptor.capture());
+            eq("account"), eq("routing"), pageCaptor.capture());
         assertEquals(0, pageCaptor.getValue().getPageNumber());
         assertEquals(25, pageCaptor.getValue().getPageSize());
     }
@@ -79,9 +81,7 @@ class TransactionCacheTest {
     void initializeCacheFailsWhenRepositoryThrowsResourceError() {
         // Given
         when(dbRepo.findForAccount(
-            org.mockito.ArgumentMatchers.anyString(),
-            org.mockito.ArgumentMatchers.anyString(),
-            org.mockito.ArgumentMatchers.any(Pageable.class)))
+            anyString(), anyString(), any(Pageable.class)))
             .thenThrow(new ResourceAccessException("database unavailable"));
         LoadingCache<String, Deque<Transaction>> cache =
             transactionCache.initializeCache(10, 60, "routing", 25);
@@ -100,9 +100,7 @@ class TransactionCacheTest {
     void initializeCacheFailsWhenRepositoryThrowsDataAccessError() {
         // Given
         when(dbRepo.findForAccount(
-            org.mockito.ArgumentMatchers.anyString(),
-            org.mockito.ArgumentMatchers.anyString(),
-            org.mockito.ArgumentMatchers.any(Pageable.class)))
+            anyString(), anyString(), any(Pageable.class)))
             .thenThrow(new DataAccessResourceFailureException(
                 "database unavailable"));
         LoadingCache<String, Deque<Transaction>> cache =
