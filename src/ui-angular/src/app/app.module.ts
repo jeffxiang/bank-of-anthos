@@ -20,6 +20,7 @@ import { HomeComponent } from './home/home.component';
 import { CurrencyPipe } from './shared/currency.pipe';
 import { AuthInterceptor } from './auth/auth.interceptor';
 import { RuntimeConfigService } from './runtime-config.service';
+import { BrandLogoComponent } from './shared/brand-logo.component';
 
 export function loadRuntimeConfig(config: RuntimeConfigService): () => Promise<void> {
   return () => config.load();
@@ -31,7 +32,8 @@ export function loadRuntimeConfig(config: RuntimeConfigService): () => Promise<v
     LoginComponent,
     SignupComponent,
     HomeComponent,
-    CurrencyPipe
+    CurrencyPipe,
+    BrandLogoComponent
   ],
   imports: [
     BrowserModule,
