@@ -17,6 +17,8 @@
 package anthos.samples.bankofanthos.ledgerwriter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
@@ -81,6 +83,49 @@ class SlackNotifierTest {
 
         // Then
         verifyNoInteractions(restTemplate);
+    }
+
+    @Test
+    @DisplayName("Given a null webhook, do not call Slack")
+    void notifyErrorNoOpsWhenWebhookNull() {
+        // Given
+        SlackNotifier notifier = new SlackNotifier(restTemplate, null, null);
+
+        // When
+        notifier.notifyError(MESSAGE);
+
+        // Then
+        verifyNoInteractions(restTemplate);
+    }
+
+    @Test
+    @DisplayName("Given no channel override, post without a channel field")
+    void notifyErrorPostsWithoutChannelWhenChannelNull() {
+        // Given
+        SlackNotifier notifier =
+                new SlackNotifier(restTemplate, WEBHOOK_URL, null);
+
+        // When
+        notifier.notifyError(MESSAGE);
+
+        // Then
+        ArgumentCaptor<HttpEntity> captor =
+                ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).postForEntity(eq(WEBHOOK_URL), captor.capture(),
+                eq(String.class));
+        Map<String, String> payload =
+                (Map<String, String>) captor.getValue().getBody();
+        assertNull(payload.get("channel"));
+    }
+
+    @Test
+    @DisplayName("Given a timeout, construct a dedicated Slack client")
+    void constructorWhenTimeoutConfiguredCreatesNotifier() {
+        // When
+        SlackNotifier notifier = new SlackNotifier("", "", 1);
+
+        // Then
+        assertNotNull(notifier);
     }
 
     @Test

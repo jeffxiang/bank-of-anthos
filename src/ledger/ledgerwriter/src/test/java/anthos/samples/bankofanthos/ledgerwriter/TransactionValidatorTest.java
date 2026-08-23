@@ -43,6 +43,7 @@ class TransactionValidatorTest {
     private Transaction transaction;
 
     private static final String LOCAL_ROUTING_NUM = "123456789";
+    private static final String NON_LOCAL_ROUTING_NUM = "987654321";
     private static final String AUTHED_ACCOUNT_NUM = "1234567890";
     private static final String NON_AUTHED_ACCOUNT_NUM = "0987654321";
     private static final String TO_ACCOUNT_NUM = "5678901234";
@@ -188,6 +189,22 @@ class TransactionValidatorTest {
     }
 
     @Test
+    @DisplayName("Given an external sender, authentication ownership is not required")
+    void validateTransactionSuccessWhenSenderIsExternal() {
+        // Given
+        when(transaction.getFromAccountNum()).thenReturn(
+                NON_AUTHED_ACCOUNT_NUM);
+        when(transaction.getFromRoutingNum()).thenReturn(
+                NON_LOCAL_ROUTING_NUM);
+
+        // Then
+        assertDoesNotThrow(() -> {
+            transactionValidator.validateTransaction(
+                    LOCAL_ROUTING_NUM, AUTHED_ACCOUNT_NUM, transaction);
+        });
+    }
+
+    @Test
     @DisplayName("Given the sender is the receiver, " +
             "IllegalArgumentException is thrown")
     void validateTransactionFailWhenSenderIsReceiver() {
@@ -206,6 +223,21 @@ class TransactionValidatorTest {
         assertNotNull(exceptionThrown);
         assertEquals(EXCEPTION_MESSAGE_SEND_TO_SELF,
                 exceptionThrown.getMessage());
+    }
+
+    @Test
+    @DisplayName("Given the same account at a different bank, the transfer is allowed")
+    void validateTransactionSuccessWhenAccountMatchesButRoutingDiffers() {
+        // Given
+        when(transaction.getToAccountNum()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getToRoutingNum()).thenReturn(
+                NON_LOCAL_ROUTING_NUM);
+
+        // Then
+        assertDoesNotThrow(() -> {
+            transactionValidator.validateTransaction(
+                    LOCAL_ROUTING_NUM, AUTHED_ACCOUNT_NUM, transaction);
+        });
     }
 
     @Test
@@ -235,7 +267,7 @@ class TransactionValidatorTest {
     void validateTransactionFailWhenReceiverIsScreened() {
         // Given
         transactionValidator = new TransactionValidator(
-                "1111111111, " + TO_ACCOUNT_NUM);
+                " , 1111111111, " + TO_ACCOUNT_NUM + ", ,");
 
         // When
         IllegalArgumentException exceptionThrown = assertThrows(

@@ -21,6 +21,8 @@ import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTI
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.contains;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
@@ -43,11 +45,14 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 import org.mockito.Mock;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestTemplate;
 
 class LedgerWriterControllerTest {
 
@@ -69,6 +74,8 @@ class LedgerWriterControllerTest {
     private Clock clock;
     @Mock
     private SlackNotifier slackNotifier;
+    @Mock
+    private RestTemplate restTemplate;
 
     private static final String VERSION = "v0.1.0";
     private static final String LOCAL_ROUTING_NUM = "123456789";
@@ -108,6 +115,7 @@ class LedgerWriterControllerTest {
                 transactionRepository, transactionValidator,
                 LOCAL_ROUTING_NUM, BALANCES_API_ADDR, VERSION);
         ledgerWriterController.slackNotifier = slackNotifier;
+        ledgerWriterController.restTemplate = restTemplate;
 
         when(verifier.verify(TOKEN)).thenReturn(jwt);
         when(jwt.getClaim(
@@ -168,7 +176,7 @@ class LedgerWriterControllerTest {
         LedgerWriterController spyLedgerWriterController =
                 spy(ledgerWriterController);
         when(transaction.getFromRoutingNum()).thenReturn(LOCAL_ROUTING_NUM);
-        when(transaction.getFromRoutingNum()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getFromAccountNum()).thenReturn(AUTHED_ACCOUNT_NUM);
         when(transaction.getAmount()).thenReturn(SENDER_BALANCE);
         when(transaction.getRequestUuid()).thenReturn(testInfo.getDisplayName());
         doReturn(SENDER_BALANCE).when(
@@ -185,6 +193,7 @@ class LedgerWriterControllerTest {
         assertEquals(ledgerWriterController.READINESS_CODE,
                 actualResult.getBody());
         assertEquals(HttpStatus.CREATED, actualResult.getStatusCode());
+        verifyNoInteractions(slackNotifier);
     }
 
     @Test
@@ -195,7 +204,7 @@ class LedgerWriterControllerTest {
         LedgerWriterController spyLedgerWriterController =
                 spy(ledgerWriterController);
         when(transaction.getFromRoutingNum()).thenReturn(LOCAL_ROUTING_NUM);
-        when(transaction.getFromRoutingNum()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getFromAccountNum()).thenReturn(AUTHED_ACCOUNT_NUM);
         when(transaction.getAmount()).thenReturn(SMALLER_THAN_SENDER_BALANCE);
         when(transaction.getRequestUuid()).thenReturn(testInfo.getDisplayName());
         doReturn(SENDER_BALANCE).when(
@@ -212,6 +221,7 @@ class LedgerWriterControllerTest {
         assertEquals(ledgerWriterController.READINESS_CODE,
                 actualResult.getBody());
         assertEquals(HttpStatus.CREATED, actualResult.getStatusCode());
+        verifyNoInteractions(slackNotifier);
     }
 
     @Test
@@ -301,6 +311,8 @@ class LedgerWriterControllerTest {
         assertEquals(EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL,
                 actualResult.getBody());
         assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL));
     }
 
     @Test
@@ -378,6 +390,8 @@ class LedgerWriterControllerTest {
                 actualResult.getBody());
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR,
                 actualResult.getStatusCode());
+        verify(slackNotifier).notifyError(
+                contains(HttpStatus.INTERNAL_SERVER_ERROR.toString()));
     }
 
     @Test
@@ -388,7 +402,7 @@ class LedgerWriterControllerTest {
         LedgerWriterController spyLedgerWriterController =
                 spy(ledgerWriterController);
         when(transaction.getFromRoutingNum()).thenReturn(LOCAL_ROUTING_NUM);
-        when(transaction.getFromRoutingNum()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getFromAccountNum()).thenReturn(AUTHED_ACCOUNT_NUM);
         when(transaction.getAmount()).thenReturn(SMALLER_THAN_SENDER_BALANCE);
         when(transaction.getRequestUuid()).thenReturn(testInfo.getDisplayName());
         doReturn(SENDER_BALANCE).when(
@@ -414,5 +428,26 @@ class LedgerWriterControllerTest {
                 EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION,
                 duplicateResult.getBody());
         assertEquals(HttpStatus.BAD_REQUEST, duplicateResult.getStatusCode());
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION));
+    }
+
+    @Test
+    @DisplayName("Given a balance response, return its available amount")
+    void getAvailableBalanceWhenServiceRespondsReturnsBody() {
+        // Given
+        String uri = BALANCES_API_ADDR + "/" + AUTHED_ACCOUNT_NUM;
+        when(restTemplate.exchange(eq(uri), eq(HttpMethod.GET),
+                any(HttpEntity.class), eq(Integer.class))).thenReturn(
+                        new ResponseEntity<>(SENDER_BALANCE, HttpStatus.OK));
+
+        // When
+        int actualBalance = ledgerWriterController.getAvailableBalance(
+                TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertEquals(SENDER_BALANCE, actualBalance);
+        verify(restTemplate).exchange(eq(uri), eq(HttpMethod.GET),
+                any(HttpEntity.class), eq(Integer.class));
     }
 }
