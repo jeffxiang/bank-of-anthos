@@ -163,6 +163,18 @@ describe('HomeComponent', () => {
     expect(component.error).toBe('Payment failed: Service unavailable');
   });
 
+  it('declines a payment to a flagged recipient without issuing a transaction', () => {
+    component.contacts = [{
+      label: 'Bob', account_num: '1055757655',
+      routing_num: '883745000', is_external: false
+    }];
+    component.paymentForm.patchValue({ recipient: '1055757655', amount: '12.34' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.submitting).toBeFalse();
+    expect(component.error).toContain('SCREEN-403');
+  });
+
   it('refreshes account data after a successful deposit', fakeAsync(() => {
     const response = new Subject<string>();
     api.transaction.and.returnValue(response);
