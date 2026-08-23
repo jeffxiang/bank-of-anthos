@@ -31,9 +31,12 @@ import com.auth0.jwt.interfaces.Claim;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.LoadingCache;
+import com.google.common.util.concurrent.UncheckedExecutionException;
+import java.lang.reflect.Field;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.HttpStatus;
@@ -43,6 +46,9 @@ import org.springframework.web.client.ResourceAccessException;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import static org.mockito.MockitoAnnotations.initMocks;
+
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 class BalanceReaderControllerTest {
 
@@ -62,6 +68,8 @@ class BalanceReaderControllerTest {
     private LoadingCache<String, Long> cache;
     @Mock
     private CacheStats stats;
+    private ConcurrentMap<String, Long> balances;
+    private LedgerReaderCallback callback;
 
     private static final String VERSION = "v0.2.0";
     private static final String LOCAL_ROUTING_NUM = "123456789";
@@ -95,8 +103,16 @@ class BalanceReaderControllerTest {
         }, clock);
 
         when(cache.stats()).thenReturn(stats);
+        balances = new ConcurrentHashMap<>();
+        when(cache.asMap()).thenReturn(balances);
+        doAnswer(invocation -> balances.put(invocation.getArgument(0),
+            invocation.getArgument(1))).when(cache).put(anyString(), anyLong());
         balanceReaderController = new BalanceReaderController(ledgerReader, verifier,
             meterRegistry, cache, LOCAL_ROUTING_NUM, VERSION);
+        ArgumentCaptor<LedgerReaderCallback> callbackCaptor =
+            ArgumentCaptor.forClass(LedgerReaderCallback.class);
+        verify(ledgerReader).startWithCallback(callbackCaptor.capture());
+        callback = callbackCaptor.getValue();
 
         when(verifier.verify(TOKEN)).thenReturn(jwt);
         when(jwt.getClaim(JWT_ACCOUNT_KEY)).thenReturn(claim);
@@ -233,6 +249,152 @@ class BalanceReaderControllerTest {
         // Then
         assertNotNull(actualResult);
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given an unchecked cache error, return 500")
+    void getBalanceFailsWhenCacheThrowsUncheckedError() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(cache.get(AUTHED_ACCOUNT_NUM))
+            .thenThrow(new UncheckedExecutionException(new RuntimeException()));
+
+        // When
+        ResponseEntity actualResult = balanceReaderController.getBalance(
+            BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given a missing authorization header, return 401")
+    void getBalanceFailsWhenAuthorizationHeaderIsNull() {
+        // Given
+        when(verifier.verify((String) null)).thenThrow(JWTVerificationException.class);
+
+        // When
+        ResponseEntity actualResult = balanceReaderController.getBalance(
+            null, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given a raw token without a Bearer prefix, return 401")
+    void getBalanceFailsWhenAuthorizationHeaderHasNoBearerPrefix() {
+        // Given
+        when(verifier.verify("raw-token")).thenThrow(JWTVerificationException.class);
+
+        // When
+        ResponseEntity actualResult = balanceReaderController.getBalance(
+            "raw-token", AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given a token with a null account claim, return 401")
+    void getBalanceFailsWhenAuthenticatedAccountClaimIsNull() {
+        // Given
+        when(claim.asString()).thenReturn(null);
+
+        // When
+        ResponseEntity actualResult = balanceReaderController.getBalance(
+            BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given a token with an empty account claim, return 401")
+    void getBalanceFailsWhenAuthenticatedAccountClaimIsEmpty() {
+        // Given
+        when(claim.asString()).thenReturn("");
+
+        // When
+        ResponseEntity actualResult = balanceReaderController.getBalance(
+            BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given a local debit and credit, update both cached balances")
+    void callbackUpdatesBalancesWhenBothTransactionSidesAreLocal() {
+        // Given
+        Transaction transaction = transaction(11L, "from", LOCAL_ROUTING_NUM,
+            "to", LOCAL_ROUTING_NUM, 25);
+        balances.put("from", 100L);
+        balances.put("to", 200L);
+
+        // When
+        callback.processTransaction(transaction);
+
+        // Then
+        assertEquals(75L, balances.get("from"));
+        assertEquals(225L, balances.get("to"));
+    }
+
+    @Test
+    @DisplayName("Given a foreign transaction, do not change cached balances")
+    void callbackDoesNotUpdateBalancesWhenTransactionIsForeign() {
+        // Given
+        Transaction transaction = transaction(12L, "from", "foreign",
+            "to", "remote", 25);
+        balances.put("from", 100L);
+        balances.put("to", 200L);
+
+        // When
+        callback.processTransaction(transaction);
+
+        // Then
+        assertEquals(100L, balances.get("from"));
+        assertEquals(200L, balances.get("to"));
+        verify(cache, never()).put(anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("Given a local side absent from cache, do not update it")
+    void callbackDoesNotUpdateMissingCachedAccount() {
+        // Given
+        Transaction transaction = transaction(13L, "missing", LOCAL_ROUTING_NUM,
+            "to", "remote", 25);
+        balances.put("to", 200L);
+
+        // When
+        callback.processTransaction(transaction);
+
+        // Then
+        assertFalse(balances.containsKey("missing"));
+        assertEquals(200L, balances.get("to"));
+        verify(cache, never()).put(anyString(), anyLong());
+    }
+
+    private Transaction transaction(long id, String fromAccount,
+        String fromRouting, String toAccount, String toRouting, int amount) {
+        Transaction transaction = new Transaction();
+        setField(transaction, "transactionId", id);
+        setField(transaction, "fromAccountNum", fromAccount);
+        setField(transaction, "fromRoutingNum", fromRouting);
+        setField(transaction, "toAccountNum", toAccount);
+        setField(transaction, "toRoutingNum", toRouting);
+        setField(transaction, "amount", amount);
+        return transaction;
+    }
+
+    private static void setField(Object target, String name, Object value) {
+        try {
+            Field field = target.getClass().getDeclaredField(name);
+            field.setAccessible(true);
+            field.set(target, value);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
     }
 
 }
