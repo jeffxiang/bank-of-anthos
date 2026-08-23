@@ -41,4 +41,13 @@ describe('RuntimeConfigService', () => {
     expect(service.demoPassword).toBe('');
     expect(service.localRouting).toBe('');
   });
+
+  it('keeps empty defaults when runtime config is an empty body', async () => {
+    const loading = service.load();
+    http.expectOne('/config.json').flush(null);
+    await loading;
+    expect(service.demoUsername).toBe('');
+    expect(service.demoPassword).toBe('');
+    expect(service.localRouting).toBe('');
+  });
 });

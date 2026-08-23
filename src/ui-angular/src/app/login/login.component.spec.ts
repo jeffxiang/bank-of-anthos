@@ -62,6 +62,26 @@ describe('LoginComponent', () => {
     expect(component.error).toBe('Login Failed');
   });
 
+  it('rejects an empty login form without calling the auth service', () => {
+    component.form.patchValue({ username: '', password: '' });
+    component.submit();
+    expect(auth.login).not.toHaveBeenCalled();
+    expect(component.form.controls.username.touched).toBeTrue();
+    expect(component.form.controls.password.touched).toBeTrue();
+  });
+
+  it('clears submitting after a failed login so the form can be retried', () => {
+    auth.login.and.returnValue(throwError(() => new Error('invalid login')));
+    component.submit();
+    expect(component.submitting).toBeFalse();
+    expect(component.error).toBe('Login Failed');
+
+    auth.login.and.returnValue(of({ user: 'testuser', acct: '1', name: 'Test User', iat: 1, exp: 2 }));
+    component.submit();
+    expect(component.error).toBe('');
+    expect(component.submitting).toBeTrue();
+  });
+
   it('leaves the prefill empty when runtime config has no demo credentials', () => {
     config.demoUsername = '';
     config.demoPassword = '';

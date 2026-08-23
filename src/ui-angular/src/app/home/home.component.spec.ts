@@ -22,9 +22,11 @@ import { RuntimeConfigService } from '../runtime-config.service';
 describe('HomeComponent', () => {
   let component: HomeComponent;
   let api: jasmine.SpyObj<ApiService>;
+  let auth: { claims: typeof claims | null };
   const claims = { user: 'testuser', acct: '1011226111', name: 'Test User', iat: 1, exp: 9999999999 };
 
   beforeEach(async () => {
+    auth = { claims };
     api = jasmine.createSpyObj<ApiService>('ApiService', [
       'balance', 'transactions', 'contacts', 'addContact', 'transaction'
     ]);
@@ -57,7 +59,7 @@ describe('HomeComponent', () => {
       declarations: [HomeComponent, CurrencyPipe],
       providers: [
         { provide: ApiService, useValue: api },
-        { provide: AuthService, useValue: { claims } },
+        { provide: AuthService, useValue: auth },
         { provide: RuntimeConfigService, useValue: {
           demoUsername: 'testuser', demoPassword: 'bankofanthos', localRouting: '883745000'
         } },
@@ -216,5 +218,148 @@ describe('HomeComponent', () => {
     component.submitDeposit();
     expect(api.transaction).not.toHaveBeenCalled();
     expect(component.error).toBe('Invalid routing number');
+  });
+
+  it('skips account loading when the session has no claims', () => {
+    auth.claims = null;
+    const fresh = TestBed.createComponent(HomeComponent).componentInstance;
+    fresh.ngOnInit();
+    expect(fresh.accountId).toBe('');
+    expect(fresh.balance).toBeNull();
+  });
+
+  it('shows an error when account data fails to load', () => {
+    api.balance.and.returnValue(throwError(() => ({ status: 500 })));
+    const fresh = TestBed.createComponent(HomeComponent).componentInstance;
+    fresh.ngOnInit();
+    expect(fresh.error).toBe('Unable to load account data');
+    expect(fresh.balance).toBeNull();
+  });
+
+  it('shows an error when the refresh after a payment fails', fakeAsync(() => {
+    api.balance.and.returnValues(of(1000), throwError(() => ({ status: 503 })));
+    const fixture = TestBed.createComponent(HomeComponent);
+    const fresh = fixture.componentInstance;
+    fresh.ngOnInit();
+    fresh.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    fresh.submitPayment();
+    tick(250);
+    expect(fresh.message).toBe('Payment successful');
+    expect(fresh.error).toBe('Unable to load account data');
+  }));
+
+  it('rejects an invalid payment form without submitting', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.paymentForm.controls.amount.touched).toBeTrue();
+  });
+
+  it('rejects payment and deposit amounts at the invalid boundary', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '0' });
+    component.submitPayment();
+    component.depositForm.patchValue({ account: 'add', newAccount: '1234567890', newRouting: '123456789', amount: '-5' });
+    component.submitDeposit();
+    expect(api.transaction).not.toHaveBeenCalled();
+  });
+
+  it('requires a recipient account for a new payment contact', () => {
+    component.paymentForm.patchValue({ recipient: 'add', newAccount: '', amount: '12.34' });
+    component.submitPayment();
+    expect(component.error).toBe('Please select a recipient');
+    expect(api.transaction).not.toHaveBeenCalled();
+  });
+
+  it('ignores duplicate submissions while a request is in flight', () => {
+    component.submitting = true;
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    component.depositForm.patchValue({ account: 'add', newAccount: '1234567890', newRouting: '123456789', amount: '12.34' });
+    component.submitDeposit();
+    expect(api.transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid deposit form without submitting', () => {
+    component.depositForm.patchValue({ account: '', amount: '12.34' });
+    component.submitDeposit();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.depositForm.controls.account.touched).toBeTrue();
+  });
+
+  it('requires both account and routing numbers for a new external account', () => {
+    component.depositForm.patchValue({ account: 'add', newAccount: '1234567890', newRouting: '', amount: '12.34' });
+    component.submitDeposit();
+    expect(component.error).toBe('Invalid routing number');
+    expect(api.transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects a deposit account that is not valid JSON', () => {
+    component.depositForm.patchValue({ account: 'not-json', amount: '12.34' });
+    component.submitDeposit();
+    expect(component.error).toBe('Invalid routing number');
+    expect(api.transaction).not.toHaveBeenCalled();
+  });
+
+  it('deposits to a stored external account', fakeAsync(() => {
+    component.depositForm.patchValue({
+      account: JSON.stringify({ account_num: '9099791699', routing_num: '808889588' }),
+      amount: '12.34'
+    });
+    component.submitDeposit();
+    tick(250);
+    expect(api.addContact).not.toHaveBeenCalled();
+    expect(api.transaction).toHaveBeenCalledWith(jasmine.objectContaining({
+      fromAccountNum: '9099791699', fromRoutingNum: '808889588', amount: 1234
+    }));
+    expect(component.message).toBe('Deposit successful');
+  }));
+
+  it('shows the server message for a failed deposit', () => {
+    api.transaction.and.returnValue(throwError(() => ({
+      error: { message: 'routing number rejected' },
+      status: 400
+    })));
+    component.depositForm.patchValue({
+      account: 'add', newAccount: '1234567890', newRouting: '123456789', amount: '12.34'
+    });
+    component.submitDeposit();
+    expect(component.error).toBe('Deposit failed: routing number rejected');
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('shows a plain-text server error for a failed payment', () => {
+    api.transaction.and.returnValue(throwError(() => ({
+      error: 'recipient account not found',
+      status: 404
+    })));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    expect(component.error).toBe('Payment failed: recipient account not found');
+  });
+
+  it('rejects a payment to a recipient that is not a saved contact', () => {
+    component.paymentForm.patchValue({ recipient: '9999999999', amount: '12.34' });
+    component.submitPayment();
+    expect(component.error).toBe('Please select a recipient');
+    expect(api.transaction).not.toHaveBeenCalled();
+  });
+
+  it('defaults both forms to new-account entry when there are no contacts', () => {
+    api.contacts.and.returnValue(of([]));
+    const fresh = TestBed.createComponent(HomeComponent).componentInstance;
+    fresh.ngOnInit();
+    expect(fresh.paymentForm.value.recipient).toBe('add');
+    expect(fresh.depositForm.value.account).toBe('add');
+  });
+
+  it('reports an unknown error when the response has no message or status', () => {
+    api.transaction.and.returnValue(throwError(() => ({ error: {} })));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    expect(component.error).toBe('Payment failed: Unknown error');
+
+    api.transaction.and.returnValue(throwError(() => ({})));
+    component.submitPayment();
+    expect(component.error).toBe('Payment failed: Unknown error');
   });
 });

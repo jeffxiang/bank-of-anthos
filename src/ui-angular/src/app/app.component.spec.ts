@@ -41,4 +41,24 @@ describe('AppComponent', () => {
     fixture.detectChanges();
     expect(fixture.nativeElement.querySelector('.account-actions')).toBeNull();
   });
+
+  it('shows account actions on home with an active session', () => {
+    auth.claims = { name: 'Test User' };
+    spyOnProperty(router, 'url', 'get').and.returnValue('/home?tab=deposits');
+    expect(fixture.componentInstance.displayName).toBe('Test User');
+    expect(fixture.componentInstance.showAccountActions).toBeTrue();
+  });
+
+  it('hides account actions without a session', () => {
+    spyOnProperty(router, 'url', 'get').and.returnValue('/home');
+    expect(fixture.componentInstance.displayName).toBe('');
+    expect(fixture.componentInstance.showAccountActions).toBeFalse();
+  });
+
+  it('clears the session and returns to login on logout', () => {
+    const navigate = spyOn(router, 'navigate').and.returnValue(Promise.resolve(true));
+    fixture.componentInstance.logout();
+    expect(auth.logout).toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith(['/login']);
+  });
 });
