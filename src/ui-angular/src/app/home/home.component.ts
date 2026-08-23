@@ -1,6 +1,5 @@
 import { Component, OnInit } from '@angular/core';
 import { FormBuilder, Validators } from '@angular/forms';
-import { Router } from '@angular/router';
 import { forkJoin, Observable, of, timer } from 'rxjs';
 import { finalize, switchMap } from 'rxjs/operators';
 import { ApiService } from '../api.service';
@@ -16,7 +15,6 @@ import { RuntimeConfigService } from '../runtime-config.service';
 })
 export class HomeComponent implements OnInit {
   accountId = '';
-  displayName = '';
   balance: number | null = null;
   transactions: Transaction[] = [];
   contacts: Contact[] = [];
@@ -43,7 +41,6 @@ export class HomeComponent implements OnInit {
     private api: ApiService,
     private auth: AuthService,
     private tx: TransactionsService,
-    private router: Router,
     private config: RuntimeConfigService
   ) {}
 
@@ -51,7 +48,6 @@ export class HomeComponent implements OnInit {
     const claims = this.auth.claims;
     if (!claims) return;
     this.accountId = claims.acct;
-    this.displayName = claims.name;
     this.loadAccountData();
   }
 
@@ -238,10 +234,5 @@ export class HomeComponent implements OnInit {
     } catch {
       return null;
     }
-  }
-
-  logout(): void {
-    this.auth.logout();
-    this.router.navigate(['/login']);
   }
 }

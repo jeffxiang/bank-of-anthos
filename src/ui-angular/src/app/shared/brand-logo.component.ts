@@ -1,9 +1,9 @@
-import { Component, Input } from '@angular/core';
+import { Component } from '@angular/core';
 
 @Component({
   selector: 'app-brand-logo',
   template: `
-    <span class="brand-logo" [class.brand-logo-small]="size === 'small'">
+    <span class="brand-logo">
       <span class="brand-wordmark">BANK OF ANTHOS</span>
       <svg class="brand-mark" viewBox="0 0 44 28" aria-hidden="true">
         <path class="brand-stripe brand-stripe-red" d="M1 14 29 1l6 3L7 17z"></path>
@@ -14,6 +14,4 @@ import { Component, Input } from '@angular/core';
   `,
   styleUrls: ['./brand-logo.component.scss']
 })
-export class BrandLogoComponent {
-  @Input() size: 'default' | 'small' = 'default';
-}
+export class BrandLogoComponent {}

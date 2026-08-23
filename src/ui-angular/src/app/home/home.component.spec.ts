@@ -2,8 +2,6 @@ import { fakeAsync, tick } from '@angular/core/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { CommonModule } from '@angular/common';
 import { ReactiveFormsModule } from '@angular/forms';
-import { RouterTestingModule } from '@angular/router/testing';
-import { Router } from '@angular/router';
 import { NoopAnimationsModule } from '@angular/platform-browser/animations';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
@@ -46,7 +44,6 @@ describe('HomeComponent', () => {
       imports: [
         CommonModule,
         ReactiveFormsModule,
-        RouterTestingModule,
         NoopAnimationsModule,
         MatButtonModule,
         MatCardModule,
@@ -60,7 +57,7 @@ describe('HomeComponent', () => {
       declarations: [HomeComponent, CurrencyPipe],
       providers: [
         { provide: ApiService, useValue: api },
-        { provide: AuthService, useValue: { claims, logout: jasmine.createSpy('logout') } },
+        { provide: AuthService, useValue: { claims } },
         { provide: RuntimeConfigService, useValue: {
           demoUsername: 'testuser', demoPassword: 'bankofanthos', localRouting: '883745000'
         } },
