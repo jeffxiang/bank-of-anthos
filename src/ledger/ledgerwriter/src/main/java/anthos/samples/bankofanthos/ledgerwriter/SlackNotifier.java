@@ -16,6 +16,7 @@
 
 package anthos.samples.bankofanthos.ledgerwriter;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import org.apache.logging.log4j.LogManager;
@@ -25,6 +26,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
@@ -33,7 +35,9 @@ import org.springframework.web.client.RestTemplate;
  * Posts error notifications to a Slack incoming webhook.
  *
  * Notifications are disabled when SLACK_WEBHOOK_URL is unset, and any failure
- * to reach Slack is logged rather than propagated to the caller.
+ * to reach Slack is logged rather than propagated to the caller. Requests use a
+ * dedicated, short-timeout RestTemplate so that an unresponsive webhook cannot
+ * hold up request threads.
  */
 @Component
 public class SlackNotifier {
@@ -47,12 +51,26 @@ public class SlackNotifier {
 
     @Autowired
     public SlackNotifier(
-            RestTemplate restTemplate,
             @Value("${SLACK_WEBHOOK_URL:}") String webhookUrl,
-            @Value("${SLACK_CHANNEL:}") String channel) {
+            @Value("${SLACK_CHANNEL:}") String channel,
+            @Value("${SLACK_TIMEOUT:3}") int timeoutSeconds) {
+        this(newRestTemplate(timeoutSeconds), webhookUrl, channel);
+    }
+
+    SlackNotifier(RestTemplate restTemplate, String webhookUrl,
+            String channel) {
         this.restTemplate = restTemplate;
         this.webhookUrl = webhookUrl;
         this.channel = channel;
+    }
+
+    private static RestTemplate newRestTemplate(int timeoutSeconds) {
+        Duration timeout = Duration.ofSeconds(timeoutSeconds);
+        SimpleClientHttpRequestFactory factory =
+            new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(timeout);
+        factory.setReadTimeout(timeout);
+        return new RestTemplate(factory);
     }
 
     /**

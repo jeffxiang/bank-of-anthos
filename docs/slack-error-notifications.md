@@ -15,7 +15,7 @@ availability (`probe_success == 0`).
 | --- | --- |
 | `SLACK_WEBHOOK_URL` | Slack incoming webhook URL. When unset or empty, notifications are disabled. |
 | `SLACK_CHANNEL` | Optional channel override, e.g. `#alerts`. Defaults to the webhook's channel. |
-| `SLACK_TIMEOUT` | Optional request timeout in seconds for the Python services (default `3`). |
+| `SLACK_TIMEOUT` | Optional connect/read timeout in seconds for the webhook request (default `3`). |
 
 Notifications are opt-in: with no `SLACK_WEBHOOK_URL` the helper is a no-op, so
 local development and tests are unaffected. Slack failures are logged and never
