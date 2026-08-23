@@ -12,7 +12,6 @@ import { of } from 'rxjs';
 import { SignupComponent } from './signup.component';
 import { ApiService } from '../api.service';
 import { AuthService } from '../auth/auth.service';
-import { BrandLogoComponent } from '../shared/brand-logo.component';
 
 describe('SignupComponent', () => {
   let component: SignupComponent;
@@ -37,7 +36,7 @@ describe('SignupComponent', () => {
         MatInputModule,
         MatSelectModule
       ],
-      declarations: [SignupComponent, BrandLogoComponent],
+      declarations: [SignupComponent],
       providers: [
         { provide: ApiService, useValue: api },
         { provide: AuthService, useValue: auth }

@@ -11,7 +11,6 @@ import { of, throwError } from 'rxjs';
 import { LoginComponent } from './login.component';
 import { AuthService } from '../auth/auth.service';
 import { RuntimeConfigService } from '../runtime-config.service';
-import { BrandLogoComponent } from '../shared/brand-logo.component';
 
 describe('LoginComponent', () => {
   let component: LoginComponent;
@@ -36,7 +35,7 @@ describe('LoginComponent', () => {
         MatFormFieldModule,
         MatInputModule
       ],
-      declarations: [LoginComponent, BrandLogoComponent],
+      declarations: [LoginComponent],
       providers: [
         { provide: AuthService, useValue: auth },
         { provide: RuntimeConfigService, useValue: config }

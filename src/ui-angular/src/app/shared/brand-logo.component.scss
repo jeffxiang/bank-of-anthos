@@ -5,14 +5,14 @@
 .brand-logo {
   align-items: center;
   display: inline-flex;
-  gap: .55rem;
+  gap: .4rem;
   white-space: nowrap;
 }
 
 .brand-mark {
-  flex: 0 0 31px;
-  height: 25px;
-  width: 31px;
+  flex: 0 0 40px;
+  height: 26px;
+  width: 40px;
 }
 
 .brand-wordmark {
@@ -31,9 +31,9 @@
 }
 
 .brand-logo-small .brand-mark {
-  flex-basis: 25px;
-  height: 20px;
-  width: 25px;
+  flex-basis: 32px;
+  height: 21px;
+  width: 32px;
 }
 
 .brand-logo-small .brand-wordmark {
