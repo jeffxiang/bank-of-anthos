@@ -1,0 +1,77 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: unit-tests-coverage
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+# Coverage is report-only for now. Once every module has a recorded baseline it
+# is promoted to a blocking gate (>=90% for compliance-critical modules).
+jobs:
+  jvm-and-python:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: make test-unit
+        continue-on-error: true
+        run: make test-unit
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-jvm-python
+          if-no-files-found: warn
+          path: |
+            src/ledger/*/target/site/jacoco/jacoco.xml
+            src/accounts/*/coverage.xml
+            src/frontend/coverage.xml
+
+  angular:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '16.20.2'
+          cache: npm
+          cache-dependency-path: src/ui-angular/package-lock.json
+      - name: npm ci
+        working-directory: src/ui-angular
+        run: npm ci
+      - name: npm run test:coverage
+        working-directory: src/ui-angular
+        continue-on-error: true
+        run: npm run test:coverage
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-ui-angular
+          if-no-files-found: warn
+          path: src/ui-angular/coverage/**
