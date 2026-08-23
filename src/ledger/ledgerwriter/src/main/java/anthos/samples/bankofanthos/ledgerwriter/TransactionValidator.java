@@ -18,8 +18,13 @@ package anthos.samples.bankofanthos.ledgerwriter;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.
@@ -30,6 +35,8 @@ import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.
         EXCEPTION_MESSAGE_SEND_TO_SELF;
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.
         EXCEPTION_MESSAGE_INVALID_AMOUNT;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.
+        EXCEPTION_MESSAGE_RECIPIENT_SCREENED;
 
 
 /**
@@ -48,10 +55,30 @@ public class TransactionValidator {
     private static final Logger LOGGER =
         LogManager.getLogger(TransactionValidator.class);
 
+    private final Set<String> screenedAccounts;
+
+    public TransactionValidator(
+            @Value("${SCREENED_ACCOUNTS:}") String screenedAccounts) {
+        this.screenedAccounts = parseAccounts(screenedAccounts);
+    }
+
+    private static Set<String> parseAccounts(String accounts) {
+        if (accounts == null || accounts.trim().isEmpty()) {
+            return Collections.emptySet();
+        }
+        Set<String> parsed = new HashSet<>();
+        Arrays.stream(accounts.split(","))
+                .map(String::trim)
+                .filter(account -> !account.isEmpty())
+                .forEach(parsed::add);
+        return Collections.unmodifiableSet(parsed);
+    }
+
     /**
      *   - Ensure sender is the same user authenticated by auth token
      *   - Ensure account and routing numbers are in the correct format
      *   - Ensure sender and receiver are different accounts
+     *   - Ensure the receiver is not a screened account
      *   - Ensure amount is positive
      *
      * @param authedAccount  the currently authenticated user account
@@ -92,6 +119,12 @@ public class TransactionValidator {
         if (fromAcct.equals(toAcct) && fromRoute.equals(toRoute)) {
             LOGGER.error("Invalid transaction: Sender is also receiver");
             throw new IllegalArgumentException(EXCEPTION_MESSAGE_SEND_TO_SELF);
+        }
+        // Ensure the receiver has not been screened out.
+        if (screenedAccounts.contains(toAcct)) {
+            LOGGER.error("Invalid transaction: Recipient screening declined");
+            throw new IllegalArgumentException(
+                    EXCEPTION_MESSAGE_RECIPIENT_SCREENED);
         }
         // Ensure amount is valid value.
         if (amount <= 0) {

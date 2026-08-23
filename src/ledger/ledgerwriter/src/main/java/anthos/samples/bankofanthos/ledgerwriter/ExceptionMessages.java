@@ -36,4 +36,6 @@ public class ExceptionMessages {
             EXCEPTION_MESSAGE_INVALID_AMOUNT = "invalid amount";
     public static final String EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION =
             "duplicate transaction uuid";
+    public static final String EXCEPTION_MESSAGE_RECIPIENT_SCREENED =
+            "recipient screening declined (code SCREEN-403)";
 }
