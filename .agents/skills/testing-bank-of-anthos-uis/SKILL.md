@@ -48,5 +48,27 @@ Scaling `ledgerwriter` to 0 is the easiest way to get a long-running request (th
 ## Error bodies from the proxy
 An unavailable backend produces an nginx HTML error page as a plain-text body; a hardened client should render only `HTTP <status>` (e.g. `Payment failed: HTTP 504`). When checking, look for `<html`, `504 Gateway Time-out</title>`, `nginx/`, or `a padding to disable MSIE` in the banner — their absence plus a single short line is the pass condition. Always also confirm the balance and top history row are unchanged, since the transaction must not have committed.
 
+## Low-CPU hosts
+`minikube start --cpus=4 --memory=8192` fails with `RSRC_INSUFFICIENT_CORES` on a 2-CPU box. Use `--cpus=$(nproc) --memory=5500` and delete non-essential deployments (`kubectl delete deployment loadgenerator`) to free CPU. Pods that look CrashLoopBackOff on first boot are often just resource churn — re-check before debugging.
+
+## Rebuilding the Python service images from the working tree
+A plain `docker build` in `src/frontend` (or `src/accounts/*`) copies a host `.venv` into the image, producing a `gunicorn` shebang that points at a host path and a container that will not start. Export a clean tree first:
+`git archive HEAD:src/accounts/userservice | tar -x -C /tmp/us && cd /tmp/us && eval "$(minikube docker-env)" && docker build -t userservice:slack .`
+
+## Which services the Angular SPA actually calls
+`src/ui-angular/nginx/default.conf.template` proxies `/api/{userservice,balancereader,transactionhistory,contacts,ledgerwriter}/` **straight to the backends** — the Flask `frontend` is NOT on the Angular request path. Anything instrumented only in `frontend.py` cannot be exercised through the SPA; drive the Flask UI on :8080 for that. Reliable Angular-reachable backend error paths: bad password (`userservice /login`), duplicate username (`userservice /users`), payment to your own account (`contacts POST /contacts`).
+
+## Testing outbound webhook / notification features
+- Pods reach a host-side listener at the minikube bridge address **`192.168.49.1`** (e.g. `http://192.168.49.1:9000/hook`), so a tiny `http.server` on the host is enough to capture request bodies. Confirm the bridge IP with `minikube ip` / `ip route`.
+- Keep two collector modes: one that replies `200` and one that accepts and **never replies**, to test outage safety. Verify the error path still returns, delayed at most by the configured timeout (`curl -w '%{time_total}'` is the cleanest evidence).
+- To prove an opt-in feature makes **zero** calls, delete the secret, `kubectl rollout restart` the deployments, confirm the env var is absent in the *new* pod, clear the collector log, and assert it stays empty — an empty log distinguishes a real no-op from a silently failing POST.
+- **Against a real third-party webhook (e.g. Slack) whose URL is a secret:** do not put the URL in the cluster secret if you also need to see the provider's reply. Instead run a small host-side *relay* that reads the URL from its own environment (bind it via the exec tool's `env` parameter, never echo it), forwards the request body verbatim, and logs the provider's status + response body. Point the cluster secret at the relay. This yields real delivery proof (`HTTP 200 "ok"` from Slack) without the URL ever appearing on screen, in a file, or in a recording. Follow up with one run where the secret holds the real URL directly to prove the pod itself can reach the provider — success there is evidenced by the *absence* of the service's send-failure warning in `kubectl logs`.
+- Validate a webhook URL is live without posting a real message by POSTing a deliberately malformed body: Slack answers `400 invalid_payload` for a live URL and `404 invalid_token` for a rotated one.
+- If the notification payload only sets a channel when a `SLACK_CHANNEL`-style var is non-empty, check the running pod (`kubectl exec ... printenv`) — when unset, messages route to the channel configured on the incoming webhook itself.
+
+## Java service caveat
+The deployed `ledgerwriter` is usually the upstream released image (e.g. `v0.6.10`), so Java-side changes in the working tree are **not** running. Verify with `kubectl get deployment ledgerwriter -o jsonpath='{..image}'` before claiming any Java behavior was tested; a local Maven+Docker rebuild takes well over 15 minutes on 2 CPUs.
+
 ## Devin Secrets Needed
-- None. All credentials are demo values baked into the manifests.
+- None for the standard flows. All app credentials are demo values baked into the manifests.
+- `SLACK_WEBHOOK_URL` (session- or repo-scoped) only when testing the Slack error-notification feature against a real workspace. Note the scope actually granted may differ from what was requested — check `list_secrets` for the qualified reference before using it.
