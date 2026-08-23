@@ -21,6 +21,7 @@ import random
 import unittest
 from unittest.mock import patch, mock_open
 
+from requests.exceptions import RequestException
 from sqlalchemy.exc import SQLAlchemyError
 import jwt
 
@@ -33,6 +34,8 @@ from userservice.tests.constants import (
     EXAMPLE_PRIVATE_KEY,
     EXAMPLE_PUBLIC_KEY,
     INVALID_USERNAMES,
+    SLACK_CHANNEL,
+    SLACK_WEBHOOK_URL,
 )
 
 
@@ -246,6 +249,44 @@ class TestUserservice(unittest.TestCase):
             response.data,
             'user {} does not exist'.format(example_user_request['username']).encode()
         )
+
+    @patch('userservice.userservice.requests.post')
+    def test_slack_notification_sent_on_error(self, mock_post):
+        """test a Slack notification is posted when a request fails"""
+        self.flask_app.config['SLACK_WEBHOOK_URL'] = SLACK_WEBHOOK_URL
+        self.flask_app.config['SLACK_CHANNEL'] = SLACK_CHANNEL
+        # mock return value of get_user which checks if user exists as None
+        self.mocked_db.return_value.get_user.return_value = None
+        # mock return value of add_user to throw SQLAlchemyError
+        self.mocked_db.return_value.add_user.side_effect = SQLAlchemyError()
+        response = self.test_app.post('/users', data=EXAMPLE_USER_REQUEST.copy())
+        # assert behavior on failure is unchanged
+        self.assertEqual(response.status_code, 500)
+        # assert the webhook was called with the endpoint and channel
+        self.assertEqual(mock_post.call_args.kwargs['url'], SLACK_WEBHOOK_URL)
+        payload = mock_post.call_args.kwargs['json']
+        self.assertEqual(payload['channel'], SLACK_CHANNEL)
+        self.assertIn('[userservice] /users failed', payload['text'])
+
+    @patch('userservice.userservice.requests.post')
+    def test_no_slack_notification_when_webhook_unset(self, mock_post):
+        """test no Slack notification is sent when no webhook is configured"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.add_user.side_effect = SQLAlchemyError()
+        response = self.test_app.post('/users', data=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 500)
+        mock_post.assert_not_called()
+
+    @patch('userservice.userservice.requests.post',
+           side_effect=RequestException('slack down'))
+    def test_slack_failure_does_not_affect_response(self, _mock_post):
+        """test a failing Slack webhook does not change the error response"""
+        self.flask_app.config['SLACK_WEBHOOK_URL'] = SLACK_WEBHOOK_URL
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.add_user.side_effect = SQLAlchemyError()
+        response = self.test_app.post('/users', data=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data, b'failed to create user')
 
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """

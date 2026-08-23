@@ -91,3 +91,7 @@ INVALID_USERNAMES = [
     "{} ".format(get_random_string(15)), # 15 characters + trailing space
     "{}".format(get_random_string(100)), # 100 characters
     ]
+
+# Slack incoming webhook used to verify error notifications
+SLACK_WEBHOOK_URL = "https://hooks.slack.com/services/test"
+SLACK_CHANNEL = "#alerts"

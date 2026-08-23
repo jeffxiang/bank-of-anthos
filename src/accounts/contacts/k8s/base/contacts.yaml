@@ -53,6 +53,15 @@ spec:
         # If no valid level is set, will default to info.
         - name: LOG_LEVEL
           value: "info"
+        # Optional Slack incoming webhook used to report application errors.
+        # Create with: kubectl create secret generic app-slack-webhook \
+        #   --from-literal=webhookURL=<YOUR_SLACK_WEBHOOK_URL>
+        - name: SLACK_WEBHOOK_URL
+          valueFrom:
+            secretKeyRef:
+              name: app-slack-webhook
+              key: webhookURL
+              optional: true
         envFrom:
         - configMapRef:
             name: environment-config

@@ -96,3 +96,7 @@ INVALID_ROUTING_NUMS = [
     "foobarbaz", # 9 char string
     "12312312💸", # 8 digits and 1 emoji
     ]
+
+# Slack incoming webhook used to verify error notifications
+SLACK_WEBHOOK_URL = "https://hooks.slack.com/services/test"
+SLACK_CHANNEL = "#alerts"

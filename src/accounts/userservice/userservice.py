@@ -25,6 +25,7 @@ import re
 
 import bcrypt
 import jwt
+import requests
 from flask import Flask, jsonify, request
 import bleach
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
@@ -62,6 +63,26 @@ def create_app():
         Readiness probe
         """
         return 'ok', 200
+
+    def _notify_slack(message):
+        """
+        Posts an error message to the configured Slack incoming webhook.
+
+        No-ops when SLACK_WEBHOOK_URL is unset. Slack failures are logged and
+        never propagated to the caller.
+        """
+        webhook_url = app.config['SLACK_WEBHOOK_URL']
+        if not webhook_url:
+            return
+        payload = {'text': '[userservice] {}'.format(message)}
+        if app.config['SLACK_CHANNEL']:
+            payload['channel'] = app.config['SLACK_CHANNEL']
+        try:
+            requests.post(url=webhook_url,
+                          json=payload,
+                          timeout=app.config['SLACK_TIMEOUT'])
+        except requests.exceptions.RequestException as slack_err:
+            app.logger.warning('Failed to send Slack notification: %s', str(slack_err))
 
     @app.route('/users', methods=['POST'])
     def create_user():
@@ -121,12 +142,15 @@ def create_app():
 
         except UserWarning as warn:
             app.logger.error("Error creating new user: %s", str(warn))
+            _notify_slack('/users failed: {}'.format(str(warn)))
             return str(warn), 400
         except NameError as err:
             app.logger.error("Error creating new user: %s", str(err))
+            _notify_slack('/users failed: {}'.format(str(err)))
             return str(err), 409
         except SQLAlchemyError as err:
             app.logger.error("Error creating new user: %s", str(err))
+            _notify_slack('/users failed: {}'.format(str(err)))
             return 'failed to create user', 500
 
         return jsonify({}), 201
@@ -203,12 +227,15 @@ def create_app():
 
         except LookupError as err:
             app.logger.error('Error logging in: %s', str(err))
+            _notify_slack('/login failed: {}'.format(str(err)))
             return str(err), 404
         except PermissionError as err:
             app.logger.error('Error logging in: %s', str(err))
+            _notify_slack('/login failed: {}'.format(str(err)))
             return str(err), 401
         except SQLAlchemyError as err:
             app.logger.error('Error logging in: %s', str(err))
+            _notify_slack('/login failed: {}'.format(str(err)))
             return 'failed to retrieve user information', 500
 
     @atexit.register
@@ -239,6 +266,11 @@ def create_app():
     app.config['EXPIRY_SECONDS'] = int(os.environ.get('TOKEN_EXPIRY_SECONDS'))
     app.config['PRIVATE_KEY'] = open(os.environ.get('PRIV_KEY_PATH'), 'r').read()
     app.config['PUBLIC_KEY'] = open(os.environ.get('PUB_KEY_PATH'), 'r').read()
+    # Slack incoming webhook used to report errors. Notifications are disabled
+    # when unset.
+    app.config['SLACK_WEBHOOK_URL'] = os.getenv('SLACK_WEBHOOK_URL', '')
+    app.config['SLACK_CHANNEL'] = os.getenv('SLACK_CHANNEL', '')
+    app.config['SLACK_TIMEOUT'] = int(os.getenv('SLACK_TIMEOUT', '3'))
 
     # Configure database connection
     try:

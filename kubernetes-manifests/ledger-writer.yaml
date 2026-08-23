@@ -80,6 +80,12 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  key: webhookURL
+                  name: app-slack-webhook
+                  optional: true
           envFrom:
             - configMapRef:
                 name: environment-config
