@@ -14,6 +14,11 @@ export class AppComponent {
     return this.auth.claims?.name || '';
   }
 
+  get showAccountActions(): boolean {
+    const path = this.router.url.split(/[?#]/, 1)[0];
+    return !!this.displayName && path !== '/login' && path !== '/signup';
+  }
+
   logout(): void {
     this.auth.logout();
     this.router.navigate(['/login']);

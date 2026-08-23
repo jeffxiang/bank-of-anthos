@@ -6,7 +6,7 @@
     <a class="site-brand" routerLink="/home" aria-label="Bank of Anthos home">
       <app-brand-logo></app-brand-logo>
     </a>
-    <div class="account-actions" *ngIf="displayName">
+    <div class="account-actions" *ngIf="showAccountActions">
       <span>{{ displayName }}</span>
       <button type="button" (click)="logout()">Sign out</button>
     </div>
