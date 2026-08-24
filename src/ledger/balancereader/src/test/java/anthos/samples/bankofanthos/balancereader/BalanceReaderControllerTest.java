@@ -31,9 +31,13 @@ import com.auth0.jwt.interfaces.Claim;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.LoadingCache;
+import com.google.common.util.concurrent.UncheckedExecutionException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.HttpStatus;
@@ -72,6 +76,8 @@ class BalanceReaderControllerTest {
     private static final String NON_AUTHED_ACCOUNT_NUM = "9876543210";
     private static final String BEARER_TOKEN = "Bearer abc";
     private static final String TOKEN = "abc";
+    private static final String FOREIGN_ROUTING_NUM = "987654321";
+    private static final int AMOUNT = 25;
 
     @BeforeEach
     void setUp() {
@@ -216,6 +222,146 @@ class BalanceReaderControllerTest {
         // Then
         assertNotNull(actualResult);
         assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given an Authorization header without the Bearer prefix, still authorize the user")
+    void getBalanceSucceedsWhenTokenHasNoBearerPrefix() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(cache.get(AUTHED_ACCOUNT_NUM)).thenReturn(BALANCE);
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.OK, actualResult.getStatusCode());
+        assertEquals(BALANCE, actualResult.getBody());
+    }
+
+    @Test
+    @DisplayName("Given no Authorization header, return 401")
+    void getBalanceFailsWhenTokenIsNull() {
+        // Given
+        when(verifier.verify((String) null)).thenThrow(JWTVerificationException.class);
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(null, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given the token carries no account claim, return 401")
+    void getBalanceFailsWhenAccountClaimIsMissing() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(null);
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        verify(cache, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("Given the cache loader fails unchecked for an authenticated user, return 500")
+    void getBalanceFailsWhenCacheThrowsUncheckedError() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(cache.get(AUTHED_ACCOUNT_NUM)).thenThrow(
+            new UncheckedExecutionException(new DataAccessResourceFailureException("db down")));
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given a local transaction, debit the sender and credit the receiver in the cache")
+    void ledgerCallbackUpdatesCachedBalancesForLocalAccounts() {
+        // Given
+        final ConcurrentMap<String, Long> cacheContents = new ConcurrentHashMap<>();
+        cacheContents.put(AUTHED_ACCOUNT_NUM, BALANCE);
+        cacheContents.put(NON_AUTHED_ACCOUNT_NUM, BALANCE);
+        when(cache.asMap()).thenReturn(cacheContents);
+
+        // When
+        captureLedgerCallback().processTransaction(TestUtil.newTransaction(1L,
+            AUTHED_ACCOUNT_NUM, LOCAL_ROUTING_NUM,
+            NON_AUTHED_ACCOUNT_NUM, LOCAL_ROUTING_NUM, AMOUNT));
+
+        // Then
+        verify(cache).put(AUTHED_ACCOUNT_NUM, BALANCE - AMOUNT);
+        verify(cache).put(NON_AUTHED_ACCOUNT_NUM, BALANCE + AMOUNT);
+    }
+
+    @Test
+    @DisplayName("Given a transaction from another bank, do not debit the sender")
+    void ledgerCallbackIgnoresForeignSender() {
+        // Given
+        final ConcurrentMap<String, Long> cacheContents = new ConcurrentHashMap<>();
+        cacheContents.put(AUTHED_ACCOUNT_NUM, BALANCE);
+        cacheContents.put(NON_AUTHED_ACCOUNT_NUM, BALANCE);
+        when(cache.asMap()).thenReturn(cacheContents);
+
+        // When
+        captureLedgerCallback().processTransaction(TestUtil.newTransaction(1L,
+            AUTHED_ACCOUNT_NUM, FOREIGN_ROUTING_NUM,
+            NON_AUTHED_ACCOUNT_NUM, LOCAL_ROUTING_NUM, AMOUNT));
+
+        // Then
+        verify(cache, never()).put(AUTHED_ACCOUNT_NUM, BALANCE - AMOUNT);
+        verify(cache).put(NON_AUTHED_ACCOUNT_NUM, BALANCE + AMOUNT);
+    }
+
+    @Test
+    @DisplayName("Given a transaction to another bank, do not credit the receiver")
+    void ledgerCallbackIgnoresForeignReceiver() {
+        // Given
+        final ConcurrentMap<String, Long> cacheContents = new ConcurrentHashMap<>();
+        cacheContents.put(AUTHED_ACCOUNT_NUM, BALANCE);
+        cacheContents.put(NON_AUTHED_ACCOUNT_NUM, BALANCE);
+        when(cache.asMap()).thenReturn(cacheContents);
+
+        // When
+        captureLedgerCallback().processTransaction(TestUtil.newTransaction(1L,
+            AUTHED_ACCOUNT_NUM, LOCAL_ROUTING_NUM,
+            NON_AUTHED_ACCOUNT_NUM, FOREIGN_ROUTING_NUM, AMOUNT));
+
+        // Then
+        verify(cache).put(AUTHED_ACCOUNT_NUM, BALANCE - AMOUNT);
+        verify(cache, never()).put(NON_AUTHED_ACCOUNT_NUM, BALANCE + AMOUNT);
+    }
+
+    @Test
+    @DisplayName("Given accounts that are not cached, do not populate the cache")
+    void ledgerCallbackIgnoresUncachedAccounts() {
+        // Given
+        when(cache.asMap()).thenReturn(new ConcurrentHashMap<>());
+
+        // When
+        captureLedgerCallback().processTransaction(TestUtil.newTransaction(1L,
+            AUTHED_ACCOUNT_NUM, LOCAL_ROUTING_NUM,
+            NON_AUTHED_ACCOUNT_NUM, LOCAL_ROUTING_NUM, AMOUNT));
+
+        // Then
+        verify(cache, never()).put(anyString(), anyLong());
+    }
+
+    private LedgerReaderCallback captureLedgerCallback() {
+        final ArgumentCaptor<LedgerReaderCallback> captor =
+            ArgumentCaptor.forClass(LedgerReaderCallback.class);
+        verify(ledgerReader).startWithCallback(captor.capture());
+        return captor.getValue();
     }
 
     @Test
