@@ -24,7 +24,9 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.Mockito.contains;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -414,5 +416,94 @@ class LedgerWriterControllerTest {
                 EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION,
                 duplicateResult.getBody());
         assertEquals(HttpStatus.BAD_REQUEST, duplicateResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given the sender balance is insufficient, " +
+            "the transaction is never saved to the ledger")
+    void addTransactionNotSavedWhenBalanceInsufficient(TestInfo testInfo) {
+        // Given
+        LedgerWriterController spyLedgerWriterController =
+                spy(ledgerWriterController);
+        when(transaction.getFromRoutingNum()).thenReturn(LOCAL_ROUTING_NUM);
+        when(transaction.getFromAccountNum()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getAmount()).thenReturn(LARGER_THAN_SENDER_BALANCE);
+        when(transaction.getRequestUuid()).thenReturn(testInfo.getDisplayName());
+        doReturn(SENDER_BALANCE).when(
+                spyLedgerWriterController).getAvailableBalance(
+                TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // When
+        final ResponseEntity actualResult =
+                spyLedgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
+        verify(transactionRepository, never()).save(transaction);
+    }
+
+    @Test
+    @DisplayName("Given JWT verification fails, " +
+            "the ledger and validator are never touched")
+    void addTransactionNoSideEffectsWhenJWTVerificationFails() {
+        // Given
+        when(verifier.verify(TOKEN)).thenThrow(
+                JWTVerificationException.class);
+
+        // When
+        final ResponseEntity actualResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        verifyNoInteractions(transactionRepository);
+        verifyNoInteractions(transactionValidator);
+    }
+
+    @Test
+    @DisplayName("Given the transaction cannot be saved to the repository, " +
+            "an error alert is emitted")
+    void addTransactionAlertsWhenRepositorySaveFails(TestInfo testInfo) {
+        // Given
+        when(transaction.getFromRoutingNum()).thenReturn(NON_LOCAL_ROUTING_NUM);
+        when(transaction.getRequestUuid()).thenReturn(testInfo.getDisplayName());
+        doThrow(new CannotCreateTransactionException(EXCEPTION_MESSAGE)).when(
+                transactionRepository).save(transaction);
+
+        // When
+        final ResponseEntity actualResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR,
+                actualResult.getStatusCode());
+        verify(slackNotifier).notifyError(contains(EXCEPTION_MESSAGE));
+    }
+
+    @Test
+    @DisplayName("Given a duplicate transaction UUID, the ledger is only " +
+            "written once and an error alert is emitted")
+    void addTransactionDuplicateUuidSavedOnceAndAlerts(TestInfo testInfo) {
+        // Given
+        when(transaction.getFromRoutingNum()).thenReturn(NON_LOCAL_ROUTING_NUM);
+        when(transaction.getRequestUuid()).thenReturn(testInfo.getDisplayName());
+
+        // When
+        final ResponseEntity originalResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+        final ResponseEntity duplicateResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertEquals(HttpStatus.CREATED, originalResult.getStatusCode());
+        assertEquals(HttpStatus.BAD_REQUEST, duplicateResult.getStatusCode());
+        verify(transactionRepository, times(1)).save(transaction);
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION));
     }
 }
