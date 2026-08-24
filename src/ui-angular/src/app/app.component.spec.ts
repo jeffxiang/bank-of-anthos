@@ -29,6 +29,27 @@ describe('AppComponent', () => {
     expect(fixture.nativeElement.querySelector('router-outlet')).toBeTruthy();
   });
 
+  it('hides account actions without an active session', () => {
+    spyOnProperty(router, 'url', 'get').and.returnValue('/home');
+    fixture.detectChanges();
+    expect(fixture.componentInstance.displayName).toBe('');
+    expect(fixture.componentInstance.showAccountActions).toBeFalse();
+    expect(fixture.nativeElement.querySelector('.account-actions')).toBeNull();
+  });
+
+  it('shows account actions and logs out an active session', () => {
+    auth.claims = { name: 'Test User' };
+    spyOnProperty(router, 'url', 'get').and.returnValue('/home?ref=email');
+    const navigate = spyOn(router, 'navigate').and.returnValue(Promise.resolve(true));
+    fixture.detectChanges();
+    expect(fixture.componentInstance.displayName).toBe('Test User');
+    expect(fixture.nativeElement.querySelector('.account-actions')).toBeTruthy();
+
+    fixture.componentInstance.logout();
+    expect(auth.logout).toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith(['/login']);
+  });
+
   it('hides account actions on login and signup with an active session', () => {
     auth.claims = { name: 'Test User' };
     const url = spyOnProperty(router, 'url', 'get').and.returnValue('/login');

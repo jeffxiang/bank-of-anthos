@@ -62,6 +62,25 @@ describe('LoginComponent', () => {
     expect(component.error).toBe('Login Failed');
   });
 
+  it('does not call the auth service when credentials are missing', () => {
+    auth.login.and.returnValue(of({ user: 'testuser', acct: '1', name: 'Test User', iat: 1, exp: 2 }));
+    component.form.patchValue({ username: '', password: '' });
+    component.submit();
+    expect(auth.login).not.toHaveBeenCalled();
+    expect(component.form.controls.username.touched).toBeTrue();
+    expect(component.form.controls.password.touched).toBeTrue();
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('clears a previous error message on resubmit', () => {
+    auth.login.and.returnValue(throwError(() => new Error('invalid login')));
+    component.submit();
+    expect(component.error).toBe('Login Failed');
+    auth.login.and.returnValue(of({ user: 'testuser', acct: '1', name: 'Test User', iat: 1, exp: 2 }));
+    component.submit();
+    expect(component.error).toBe('');
+  });
+
   it('leaves the prefill empty when runtime config has no demo credentials', () => {
     config.demoUsername = '';
     config.demoPassword = '';

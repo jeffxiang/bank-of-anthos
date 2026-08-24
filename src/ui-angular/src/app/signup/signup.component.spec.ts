@@ -8,7 +8,7 @@ import { MatCardModule } from '@angular/material/card';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatSelectModule } from '@angular/material/select';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { SignupComponent } from './signup.component';
 import { ApiService } from '../api.service';
 import { AuthService } from '../auth/auth.service';
@@ -73,6 +73,87 @@ describe('SignupComponent', () => {
     component.submit();
     expect(api.createUser).toHaveBeenCalledWith(jasmine.objectContaining({
       'password-repeat': 'secret'
+    }));
+  });
+
+  const invalidUsernames = ['x', 'a'.repeat(16), 'user name', 'user🐻', 'user-name', ' user'];
+
+  it('rejects usernames outside the allowed pattern', () => {
+    invalidUsernames.forEach(username => {
+      component.form.patchValue({ username });
+      expect(component.form.controls.username.invalid).withContext(username).toBeTrue();
+    });
+  });
+
+  it('requires every visible field before submitting', () => {
+    component.form.patchValue({
+      username: 'newuser', password: 'secret', passwordRepeat: 'secret',
+      firstname: 'New', lastname: 'User', birthday: ''
+    });
+    component.submit();
+    expect(component.form.controls.birthday.invalid).toBeTrue();
+    expect(component.form.controls.birthday.touched).toBeTrue();
+    expect(component.error).toBe('');
+    expect(api.createUser).not.toHaveBeenCalled();
+  });
+
+  it('clears the mismatch error once the repeat password matches', () => {
+    component.form.patchValue({ password: 'secret', passwordRepeat: 'other' });
+    expect(component.form.controls.passwordRepeat.errors).toEqual({ mismatch: true });
+    component.form.patchValue({ passwordRepeat: 'secret' });
+    expect(component.form.controls.passwordRepeat.errors).toBeNull();
+    expect(component.passwordMismatch).toBeFalse();
+  });
+
+  it('keeps the required error alongside a cleared mismatch', () => {
+    component.form.patchValue({ password: 'secret', passwordRepeat: 'other' });
+    component.form.patchValue({ passwordRepeat: '' });
+    expect(component.form.controls.passwordRepeat.errors).toEqual({ required: true });
+  });
+
+  it('shows the server message when account creation is rejected', () => {
+    component.form.patchValue({
+      username: 'newuser', password: 'secret', passwordRepeat: 'secret',
+      firstname: 'New', lastname: 'User', birthday: '1990-01-01'
+    });
+    api.createUser.and.returnValue(throwError(() => ({ error: 'user already exists' })));
+    component.submit();
+    expect(component.error).toBe('user already exists');
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('falls back to a generic message when the server sends no detail', () => {
+    component.form.patchValue({
+      username: 'newuser', password: 'secret', passwordRepeat: 'secret',
+      firstname: 'New', lastname: 'User', birthday: '1990-01-01'
+    });
+    api.createUser.and.returnValue(throwError(() => ({ status: 500 })));
+    component.submit();
+    expect(component.error).toBe('Error: Account creation failed');
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('reports a failed login after the account is created', () => {
+    component.form.patchValue({
+      username: 'newuser', password: 'secret', passwordRepeat: 'secret',
+      firstname: 'New', lastname: 'User', birthday: '1990-01-01'
+    });
+    api.createUser.and.returnValue(of({}));
+    auth.login.and.returnValue(throwError(() => new Error('login failed')));
+    component.submit();
+    expect(component.error).toBe('Account created, but login failed');
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('sends the disabled PII fields with the creation request', () => {
+    component.form.patchValue({
+      username: 'newuser', password: 'secret', passwordRepeat: 'secret',
+      firstname: 'New', lastname: 'User', birthday: '1990-01-01'
+    });
+    api.createUser.and.returnValue(of({}));
+    component.submit();
+    expect(api.createUser).toHaveBeenCalledWith(jasmine.objectContaining({
+      address: '123 Nth Avenue, New York City', state: 'NY', zip: '10004', ssn: '111-22-3333'
     }));
   });
 });
