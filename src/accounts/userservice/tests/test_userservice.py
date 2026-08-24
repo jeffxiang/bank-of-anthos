@@ -36,6 +36,7 @@ from userservice.tests.constants import (
     INVALID_USERNAMES,
     SLACK_CHANNEL,
     SLACK_WEBHOOK_URL,
+    generate_rsa_key,
 )
 
 
@@ -249,6 +250,69 @@ class TestUserservice(unittest.TestCase):
             response.data,
             'user {} does not exist'.format(example_user_request['username']).encode()
         )
+
+    def test_login_sql_error_500_status_code_error_message(self):
+        """test logging in when the user lookup raises a SQL error"""
+        # mock get_user to throw SQLAlchemyError
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        # send request to test client
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert 500 response
+        self.assertEqual(response.status_code, 500)
+        # assert we get correct error message
+        self.assertEqual(response.data, b'failed to retrieve user information')
+
+    @patch('bcrypt.checkpw', return_value=False)
+    @patch('userservice.userservice.requests.post')
+    def test_login_invalid_password_sends_slack_notification(self, mock_post,
+                                                             _mock_checkpw):
+        """test a Slack notification is posted when a login is rejected"""
+        self.flask_app.config['SLACK_WEBHOOK_URL'] = SLACK_WEBHOOK_URL
+        self.flask_app.config['SLACK_CHANNEL'] = SLACK_CHANNEL
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert behavior on failure is unchanged
+        self.assertEqual(response.status_code, 401)
+        # assert the webhook was called with the endpoint and channel
+        self.assertEqual(mock_post.call_args.kwargs['url'], SLACK_WEBHOOK_URL)
+        payload = mock_post.call_args.kwargs['json']
+        self.assertEqual(payload['channel'], SLACK_CHANNEL)
+        self.assertIn('[userservice] /login failed', payload['text'])
+
+    @patch('bcrypt.checkpw', return_value=True)
+    @patch('userservice.userservice.requests.post')
+    def test_no_slack_notification_on_successful_login(self, mock_post,
+                                                       _mock_checkpw):
+        """test no Slack notification is sent when a login succeeds"""
+        self.flask_app.config['SLACK_WEBHOOK_URL'] = SLACK_WEBHOOK_URL
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 200)
+        mock_post.assert_not_called()
+
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_token_not_verifiable_with_foreign_public_key(self, _mock_checkpw):
+        """test the login token only verifies against the service's own key"""
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 200)
+        # an unrelated, ephemeral keypair must not validate the signature
+        _foreign_private_key, foreign_public_key = generate_rsa_key()
+        with self.assertRaises(jwt.exceptions.InvalidSignatureError):
+            jwt.decode(algorithms='RS256',
+                       jwt=response.json['token'],
+                       key=foreign_public_key)
+        # the token still carries the account claim of the authenticated user
+        decoded_value = jwt.decode(algorithms='RS256',
+                                   jwt=response.json['token'],
+                                   key=EXAMPLE_PUBLIC_KEY)
+        self.assertEqual(decoded_value['acct'], EXAMPLE_USER['accountid'])
 
     @patch('userservice.userservice.requests.post')
     def test_slack_notification_sent_on_error(self, mock_post):
