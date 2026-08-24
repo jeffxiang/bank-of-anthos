@@ -22,12 +22,13 @@ import unittest
 from unittest.mock import patch, mock_open
 
 from requests.exceptions import RequestException
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 import jwt
 
 from userservice.userservice import create_app
 from userservice.tests.constants import (
     TIMESTAMP_FORMAT,
+    EXAMPLE_ENV,
     EXAMPLE_USER_REQUEST,
     EXAMPLE_USER,
     EXPECTED_FIELDS,
@@ -36,6 +37,8 @@ from userservice.tests.constants import (
     INVALID_USERNAMES,
     SLACK_CHANNEL,
     SLACK_WEBHOOK_URL,
+    UNSANITIZED_PII_FIELDS,
+    generate_rsa_key,
 )
 
 
@@ -44,30 +47,29 @@ class TestUserservice(unittest.TestCase):
     Tests cases for userservice
     """
 
-    def setUp(self):
-        """Setup Flask TestClient and mock userdatabase"""
+    # pylint: disable=too-many-public-methods
+
+    @staticmethod
+    def _create_app(env_overrides=None, db_side_effect=None):
+        """Create the app with mocked key files, env vars and database"""
+        env = EXAMPLE_ENV.copy()
+        env.update(env_overrides or {})
         # mock opening files
         with patch('userservice.userservice.open', mock_open(read_data='foo')):
             # mock env vars
-            with patch(
-                'os.environ',
-                {
-                    'VERSION': '1',
-                    'TOKEN_EXPIRY_SECONDS': '3600',
-                    'PRIV_KEY_PATH': '1',
-                    'PUB_KEY_PATH': '1',
-                    'ENABLE_TRACING': 'false',
-                },
-            ):
+            with patch('os.environ', env):
                 # mock db module as MagicMock, context manager handles cleanup
                 with patch('userservice.userservice.UserDb') as mock_db:
-                    self.mocked_db = mock_db
-                    # get create flask app
-                    self.flask_app = create_app()
-                    # set testing config
-                    self.flask_app.config['TESTING'] = True
-                    # create test client
-                    self.test_app = self.flask_app.test_client()
+                    mock_db.side_effect = db_side_effect
+                    return create_app(), mock_db
+
+    def setUp(self):
+        """Setup Flask TestClient and mock userdatabase"""
+        self.flask_app, self.mocked_db = self._create_app()
+        # set testing config
+        self.flask_app.config['TESTING'] = True
+        # create test client
+        self.test_app = self.flask_app.test_client()
 
     def test_version_endpoint_returns_200_status_code_correct_version(self):
         """test if correct version is returned"""
@@ -287,6 +289,154 @@ class TestUserservice(unittest.TestCase):
         response = self.test_app.post('/users', data=EXAMPLE_USER_REQUEST.copy())
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, b'failed to create user')
+
+    def test_login_sql_error_500_status_code_error_message(self):
+        """test logging in when the database lookup fails"""
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert 500 response
+        self.assertEqual(response.status_code, 500)
+        # assert we get correct error message
+        self.assertEqual(response.data, b'failed to retrieve user information')
+
+    @patch('userservice.userservice.requests.post')
+    def test_login_failure_sends_slack_notification(self, mock_post):
+        """test a Slack notification is posted when a login fails"""
+        self.flask_app.config['SLACK_WEBHOOK_URL'] = SLACK_WEBHOOK_URL
+        self.flask_app.config['SLACK_CHANNEL'] = SLACK_CHANNEL
+        self.mocked_db.return_value.get_user.return_value = None
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert behavior on failure is unchanged
+        self.assertEqual(response.status_code, 404)
+        payload = mock_post.call_args.kwargs['json']
+        self.assertIn('[userservice] /login failed', payload['text'])
+
+    @patch('userservice.userservice.requests.post')
+    def test_slack_notification_omits_channel_when_unset(self, mock_post):
+        """test the Slack payload has no channel when none is configured"""
+        self.flask_app.config['SLACK_WEBHOOK_URL'] = SLACK_WEBHOOK_URL
+        self.mocked_db.return_value.get_user.return_value = None
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 404)
+        self.assertNotIn('channel', mock_post.call_args.kwargs['json'])
+
+    @patch('userservice.userservice.requests.post')
+    def test_no_slack_notification_on_successful_create(self, mock_post):
+        """test no Slack notification is sent when user creation succeeds"""
+        self.flask_app.config['SLACK_WEBHOOK_URL'] = SLACK_WEBHOOK_URL
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        response = self.test_app.post('/users', data=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 201)
+        mock_post.assert_not_called()
+
+    @patch('userservice.userservice.requests.post')
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_no_slack_notification_on_successful_login(self, _mock_checkpw, mock_post):
+        """test no Slack notification is sent when a login succeeds"""
+        self.flask_app.config['SLACK_WEBHOOK_URL'] = SLACK_WEBHOOK_URL
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 200)
+        mock_post.assert_not_called()
+
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_token_is_rs256_signed_with_expected_claims(self, _mock_checkpw):
+        """test the issued token is RS256 signed and carries the account claims"""
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 200)
+        token = response.json['token']
+        # assert the token is signed with the asymmetric algorithm, not 'none' or HMAC
+        self.assertEqual(jwt.get_unverified_header(token)['alg'], 'RS256')
+        decoded_value = jwt.decode(algorithms='RS256', jwt=token, key=EXAMPLE_PUBLIC_KEY)
+        self.assertEqual(decoded_value['acct'], EXAMPLE_USER['accountid'])
+        # assert the token expires after the configured lifetime
+        self.assertEqual(
+            decoded_value['exp'] - decoded_value['iat'],
+            self.flask_app.config['EXPIRY_SECONDS'],
+        )
+
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_token_rejected_when_verified_with_other_key(self, _mock_checkpw):
+        """test a token does not verify against an unrelated public key"""
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        _other_private_key, other_public_key = generate_rsa_key()
+        with self.assertRaises(jwt.exceptions.InvalidSignatureError):
+            jwt.decode(algorithms='RS256',
+                       jwt=response.json['token'],
+                       key=other_public_key)
+
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_token_expires_after_configured_lifetime(self, _mock_checkpw):
+        """test a token issued with an elapsed lifetime does not verify"""
+        flask_app, mocked_db = self._create_app({'TOKEN_EXPIRY_SECONDS': '-1'})
+        flask_app.config['TESTING'] = True
+        flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        response = flask_app.test_client().get('/login',
+                                               query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 200)
+        with self.assertRaises(jwt.exceptions.ExpiredSignatureError):
+            jwt.decode(algorithms='RS256',
+                       jwt=response.json['token'],
+                       key=EXAMPLE_PUBLIC_KEY)
+
+    def test_create_user_201_status_code_sanitized_pii_stored(self):
+        """test markup in PII fields is escaped before it reaches the database"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        example_user_request = EXAMPLE_USER_REQUEST.copy()
+        example_user_request.update(UNSANITIZED_PII_FIELDS)
+        response = self.test_app.post('/users', data=example_user_request)
+        self.assertEqual(response.status_code, 201)
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        for field in UNSANITIZED_PII_FIELDS:
+            # assert no raw markup survived sanitization
+            self.assertNotIn('<', user_object[field],
+                             'field {} was stored unsanitized'.format(field))
+
+    def test_create_app_db_connection_failure_exits(self):
+        """test the app exits when the database connection cannot be opened"""
+        db_error = OperationalError('SELECT 1', {}, Exception('connection refused'))
+        with self.assertRaises(SystemExit) as context:
+            self._create_app(db_side_effect=db_error)
+        self.assertEqual(context.exception.code, 1)
+
+    @patch('userservice.userservice.FlaskInstrumentor')
+    @patch('userservice.userservice.set_global_textmap')
+    @patch('userservice.userservice.BatchSpanProcessor')
+    @patch('userservice.userservice.CloudTraceSpanExporter')
+    @patch('userservice.userservice.TracerProvider')
+    @patch('userservice.userservice.trace')
+    def test_create_app_tracing_enabled_instruments_app(self,
+                                                        mock_trace,
+                                                        mock_provider,
+                                                        _mock_exporter,
+                                                        mock_processor,
+                                                        mock_textmap,
+                                                        mock_instrumentor):
+        """test tracing is wired up when tracing is enabled"""
+        flask_app, _mocked_db = self._create_app({'ENABLE_TRACING': 'true'})
+        mock_trace.set_tracer_provider.assert_called_once_with(mock_provider.return_value)
+        mock_trace.get_tracer_provider.return_value.add_span_processor.assert_called_once_with(
+            mock_processor.return_value
+        )
+        mock_textmap.assert_called_once()
+        mock_instrumentor.return_value.instrument_app.assert_called_once_with(flask_app)
+
+    @patch('userservice.userservice.atexit')
+    def test_shutdown_handler_logs_on_exit(self, mock_atexit):
+        """test the registered shutdown handler logs service termination"""
+        flask_app, _mocked_db = self._create_app()
+        shutdown_handler = mock_atexit.register.call_args[0][0]
+        with self.assertLogs(flask_app.logger, level='INFO') as logs:
+            shutdown_handler()
+        self.assertIn('Stopping userservice.', logs.output[0])
 
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """

@@ -61,6 +61,13 @@ EXAMPLE_USER = {
     'zip': '94043',
     'ssn': '123',
 }
+EXAMPLE_ENV = {
+    'VERSION': '1',
+    'TOKEN_EXPIRY_SECONDS': '3600',
+    'PRIV_KEY_PATH': '1',
+    'PUB_KEY_PATH': '1',
+    'ENABLE_TRACING': 'false',
+}
 EXPECTED_FIELDS = [
     'username',
     'password',
@@ -95,3 +102,13 @@ INVALID_USERNAMES = [
 # Slack incoming webhook used to verify error notifications
 SLACK_WEBHOOK_URL = "https://hooks.slack.com/services/test"
 SLACK_CHANNEL = "#alerts"
+
+# Synthetic PII values containing markup that must be escaped before storage
+UNSANITIZED_PII_FIELDS = {
+    'firstname': '<script>alert(1)</script>Jane',
+    'lastname': '<iframe src=evil></iframe>Roe',
+    'address': '<img src=x onerror=alert(1)>1600 Amphitheatre Parkway',
+    'state': '<style>body{}</style>CA',
+    'zip': '<object data=x></object>94043',
+    'ssn': '<script>456</script>',
+}
