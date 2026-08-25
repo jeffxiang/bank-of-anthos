@@ -31,6 +31,7 @@ import com.auth0.jwt.interfaces.Claim;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.LoadingCache;
+import com.google.common.util.concurrent.UncheckedExecutionException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -70,6 +71,7 @@ class BalanceReaderControllerTest {
     private static final long BALANCE = 100l;
     private static final String AUTHED_ACCOUNT_NUM = "1234567890";
     private static final String NON_AUTHED_ACCOUNT_NUM = "9876543210";
+    private static final String MALFORMED_ACCOUNT_NUM = "12341545\uD83D\uDC3B";
     private static final String BEARER_TOKEN = "Bearer abc";
     private static final String TOKEN = "abc";
 
@@ -233,6 +235,74 @@ class BalanceReaderControllerTest {
         // Then
         assertNotNull(actualResult);
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given the cache throws an unchecked execution error, return 500")
+    void getBalance_WhenCacheThrowsUncheckedExecutionException_Returns500() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(cache.get(AUTHED_ACCOUNT_NUM)).thenThrow(
+            new UncheckedExecutionException(new RuntimeException("cache backend down")));
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+        assertEquals("cache error", actualResult.getBody());
+    }
+
+    @Test
+    @DisplayName("Given an Authorization header without the Bearer prefix, "
+            + "verify the raw token and return the balance")
+    void getBalance_WhenAuthorizationHeaderHasNoBearerPrefix_VerifiesRawToken() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(cache.get(AUTHED_ACCOUNT_NUM)).thenReturn(BALANCE);
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.OK, actualResult.getStatusCode());
+        assertEquals(BALANCE, actualResult.getBody());
+        verify(verifier).verify(TOKEN);
+    }
+
+    @Test
+    @DisplayName("Given a valid token with no account claim, return 401 without hitting the cache")
+    void getBalance_WhenTokenHasNoAccountClaim_Returns401() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(null);
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        assertEquals("not authorized", actualResult.getBody());
+        verify(cache, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("Given a malformed unicode account id, return 401 without hitting the cache")
+    void getBalance_WhenAccountIdIsMalformedUnicode_Returns401() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(
+            BEARER_TOKEN, MALFORMED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        assertEquals("not authorized", actualResult.getBody());
+        verify(cache, never()).get(anyString());
     }
 
 }
