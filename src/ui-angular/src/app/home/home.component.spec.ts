@@ -209,6 +209,38 @@ describe('HomeComponent', () => {
     }));
   }));
 
+  it('rejects a payment with a non-positive amount without calling the API', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '0' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.paymentForm.touched).toBeTrue();
+    expect(component.error).toBe('');
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('asks for a recipient when a new recipient has no account number', () => {
+    component.paymentForm.patchValue({ recipient: 'add', newAccount: '', amount: '12.34' });
+    component.submitPayment();
+    expect(api.addContact).not.toHaveBeenCalled();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.error).toBe('Please select a recipient');
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('shows a load error when account data cannot be fetched', () => {
+    api.balance.and.returnValue(throwError(() => ({ status: 500 })));
+    component.ngOnInit();
+    expect(component.error).toBe('Unable to load account data');
+  });
+
+  it('reports an unknown error when a failed payment carries no usable detail', () => {
+    api.transaction.and.returnValue(throwError(() => ({ error: {} })));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    expect(component.error).toBe('Payment failed: Unknown error');
+    expect(component.submitting).toBeFalse();
+  });
+
   it('validates and rejects an invalid deposit', () => {
     component.depositForm.patchValue({
       account: 'add', newAccount: '1234567890', newRouting: '883745000', amount: '2'
