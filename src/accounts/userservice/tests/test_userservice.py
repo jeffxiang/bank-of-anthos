@@ -288,6 +288,72 @@ class TestUserservice(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, b'failed to create user')
 
+    def test_login_sql_error_500_status_code_error_message(self):
+        """test logging in when the database raises a SQL error"""
+        # mock get_user to throw SQLAlchemyError
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        # send request to test client
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert 500 response code
+        self.assertEqual(response.status_code, 500)
+        # assert we get correct error message
+        self.assertEqual(response.data, b'failed to retrieve user information')
+
+    # mock check pw to return true to simulate correct password
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_200_status_code_jwt_acct_and_expiry_claims(self, _mock_checkpw):
+        """test the signed JWT carries the account id and configured expiry"""
+        # create example user request
+        example_user = EXAMPLE_USER.copy()
+        self.mocked_db.return_value.get_user.return_value = example_user
+        # set private key
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        # send request to test client
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert 200 response
+        self.assertEqual(response.status_code, 200)
+        # decode payload using public key
+        decoded_value = jwt.decode(algorithms='RS256',
+                                   jwt=response.json['token'],
+                                   key=EXAMPLE_PUBLIC_KEY,)
+        # assert account claim matches the user record
+        self.assertEqual(decoded_value['acct'], EXAMPLE_USER['accountid'])
+        # assert expiry equals configured EXPIRY_SECONDS after issue time
+        self.assertEqual(decoded_value['exp'] - decoded_value['iat'],
+                         self.flask_app.config['EXPIRY_SECONDS'])
+
+    def test_create_user_201_status_code_username_length_boundaries(self):
+        """test creating users with usernames at 2 and 15 character bounds"""
+        # mock return value of get_user which checks if user exists as None
+        self.mocked_db.return_value.get_user.return_value = None
+        # mock return value for generate_id from user_db
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        # test both boundary lengths of the allowed 2-15 range
+        for boundary_username in ['ab', 'a' * 15]:
+            example_user_request = EXAMPLE_USER_REQUEST.copy()
+            example_user_request['username'] = boundary_username
+            # send request to test client
+            response = self.test_app.post('/users', data=example_user_request)
+            # assert 201 response code
+            self.assertEqual(response.status_code, 201,
+                             'username {} returned incorrect status code'.format(
+                                 boundary_username))
+
+    @patch('userservice.userservice.requests.post')
+    def test_create_user_201_status_code_no_slack_notification_on_success(self, mock_post):
+        """test no Slack notification is sent when user creation succeeds"""
+        self.flask_app.config['SLACK_WEBHOOK_URL'] = SLACK_WEBHOOK_URL
+        # mock return value of get_user which checks if user exists as None
+        self.mocked_db.return_value.get_user.return_value = None
+        # mock return value for generate_id from user_db
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        # send request to test client
+        response = self.test_app.post('/users', data=EXAMPLE_USER_REQUEST.copy())
+        # assert 201 response code
+        self.assertEqual(response.status_code, 201)
+        # assert no webhook call was made
+        mock_post.assert_not_called()
+
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """
         # mock return value of get_user which checks if user exists as None
