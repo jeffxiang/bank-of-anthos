@@ -288,6 +288,56 @@ class TestUserservice(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, b'failed to create user')
 
+    def test_create_user_sanitizes_pii_fields_and_preserves_unicode(self):
+        """test PII fields are sanitized while unicode/emoji values survive"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        example_user_request = EXAMPLE_USER_REQUEST.copy()
+        example_user_request['firstname'] = '<script>alert(1)</script>'
+        example_user_request['lastname'] = 'Doé 💸'
+        example_user_request['address'] = '  1600 Amphitheatre Parkway  '
+        response = self.test_app.post('/users', data=example_user_request)
+        self.assertEqual(response.status_code, 201)
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        # markup in PII fields is escaped, not stored verbatim
+        self.assertEqual(user_object['firstname'],
+                         '&lt;script&gt;alert(1)&lt;/script&gt;')
+        # non-ascii PII is preserved and surrounding whitespace is kept as sent
+        self.assertEqual(user_object['lastname'], 'Doé 💸')
+        self.assertEqual(user_object['address'], '  1600 Amphitheatre Parkway  ')
+
+    def test_create_user_lookup_sql_error_500_status_code_error_message(self):
+        """test creating a user when the existence check throws a SQL error"""
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        response = self.test_app.post('/users', data=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data, b'failed to create user')
+        # no user is written when the lookup fails
+        self.mocked_db.return_value.add_user.assert_not_called()
+
+    def test_login_sql_error_500_status_code_error_message(self):
+        """test logging in when the user lookup throws a SQL error"""
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data, b'failed to retrieve user information')
+
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_token_expired_rejected_by_verifier(self, _mock_checkpw):
+        """test a token signed with a non-positive expiry fails verification"""
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        # expire the token the moment it is issued
+        self.flask_app.config['EXPIRY_SECONDS'] = -1
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 200)
+        with self.assertRaises(jwt.ExpiredSignatureError):
+            jwt.decode(algorithms='RS256',
+                       jwt=response.json['token'],
+                       key=EXAMPLE_PUBLIC_KEY)
+
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """
         # mock return value of get_user which checks if user exists as None
