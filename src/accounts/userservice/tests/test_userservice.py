@@ -288,6 +288,60 @@ class TestUserservice(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, b'failed to create user')
 
+    def test_create_user_empty_pii_field_400_status_code_error_message(self):
+        """test creating a new user with an empty value for each PII field"""
+        pii_fields = [f for f in EXPECTED_FIELDS if f != 'username']
+        for pii_field in pii_fields:
+            example_user = EXAMPLE_USER_REQUEST.copy()
+            # blank out a single PII field
+            example_user[pii_field] = ''
+            response = self.test_app.post('/users', data=example_user)
+            self.assertEqual(response.status_code, 400,
+                             'field {} returned incorrect status code'.format(pii_field))
+            self.assertEqual(response.data, b'missing value for input field(s)',
+                             'field {} returned unexpected error message'.format(pii_field))
+
+    def test_create_user_username_length_boundaries_201_status_code(self):
+        """test creating users with usernames at the 2 and 15 character bounds"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        for username in ['ab', 'a' * 15]:
+            example_user = EXAMPLE_USER_REQUEST.copy()
+            example_user['username'] = username
+            response = self.test_app.post('/users', data=example_user)
+            self.assertEqual(response.status_code, 201,
+                             'username {} returned incorrect status code'.format(username))
+            user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+            self.assertEqual(user_object['username'], username)
+
+    def test_create_user_sanitizes_pii_fields_before_persisting(self):
+        """test PII fields are sanitized while unicode and emoji values survive"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        example_user = EXAMPLE_USER_REQUEST.copy()
+        example_user['lastname'] = '<script>alert(1)</script>'
+        example_user['firstname'] = 'Zoë 🏦'
+        example_user['address'] = '仮の住所 1'
+        response = self.test_app.post('/users', data=example_user)
+        self.assertEqual(response.status_code, 201)
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        # markup is escaped rather than stored verbatim
+        self.assertNotIn('<script>', user_object['lastname'])
+        # non-ascii PII is preserved unchanged
+        self.assertEqual(user_object['firstname'], 'Zoë 🏦')
+        self.assertEqual(user_object['address'], '仮の住所 1')
+
+    def test_login_db_error_500_status_code_no_token_issued(self):
+        """test a DB failure during login returns 500 and signs no JWT"""
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert 500 response
+        self.assertEqual(response.status_code, 500)
+        # assert we get correct error message and no token
+        self.assertEqual(response.data, b'failed to retrieve user information')
+
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """
         # mock return value of get_user which checks if user exists as None
