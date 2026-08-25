@@ -18,6 +18,8 @@ package anthos.samples.bankofanthos.ledgerwriter;
 
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION;
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_INSUFFICIENT_BALANCE;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_NOT_AUTHENTICATED;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_RECIPIENT_SCREENED;
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -301,6 +303,91 @@ class LedgerWriterControllerTest {
         assertEquals(EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL,
                 actualResult.getBody());
         assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL));
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    @DisplayName("Given the recipient is screened, return HTTP Status 400 " +
+            "and leave the ledger untouched")
+    void addTransactionWhenRecipientScreened(TestInfo testInfo) {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getRequestUuid()).thenReturn(testInfo.getDisplayName());
+        doThrow(new IllegalArgumentException(
+                EXCEPTION_MESSAGE_RECIPIENT_SCREENED)).when(
+                        transactionValidator).validateTransaction(
+                                LOCAL_ROUTING_NUM, AUTHED_ACCOUNT_NUM,
+                                transaction);
+
+        // When
+        final ResponseEntity actualResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(EXCEPTION_MESSAGE_RECIPIENT_SCREENED,
+                actualResult.getBody());
+        assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_RECIPIENT_SCREENED));
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    @DisplayName("Given the recipient is screened, a retry with the same request uuid " +
+            "is still declined for screening rather than as a duplicate")
+    void addTransactionWhenRecipientScreenedDoesNotCacheRequestUuid(TestInfo testInfo) {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getRequestUuid()).thenReturn(testInfo.getDisplayName());
+        doThrow(new IllegalArgumentException(
+                EXCEPTION_MESSAGE_RECIPIENT_SCREENED)).when(
+                        transactionValidator).validateTransaction(
+                                LOCAL_ROUTING_NUM, AUTHED_ACCOUNT_NUM,
+                                transaction);
+
+        // When
+        ledgerWriterController.addTransaction(BEARER_TOKEN, transaction);
+        final ResponseEntity retryResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(retryResult);
+        assertEquals(EXCEPTION_MESSAGE_RECIPIENT_SCREENED,
+                retryResult.getBody());
+        assertEquals(HttpStatus.BAD_REQUEST, retryResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given the sender does not match the authenticated account, " +
+            "return HTTP Status 400")
+    void addTransactionWhenSenderNotAuthenticated(TestInfo testInfo) {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getRequestUuid()).thenReturn(testInfo.getDisplayName());
+        doThrow(new IllegalArgumentException(
+                EXCEPTION_MESSAGE_NOT_AUTHENTICATED)).when(
+                        transactionValidator).validateTransaction(
+                                LOCAL_ROUTING_NUM, AUTHED_ACCOUNT_NUM,
+                                transaction);
+
+        // When
+        final ResponseEntity actualResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(EXCEPTION_MESSAGE_NOT_AUTHENTICATED,
+                actualResult.getBody());
+        assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_NOT_AUTHENTICATED));
+        verifyNoInteractions(transactionRepository);
     }
 
     @Test
