@@ -209,6 +209,41 @@ describe('HomeComponent', () => {
     }));
   }));
 
+  it('rejects a payment with no amount and does not call the API', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.paymentForm.controls.amount.touched).toBeTrue();
+    expect(component.error).toBe('');
+  });
+
+  it('shows a recipient error when a new payment recipient has no account number', () => {
+    component.paymentForm.patchValue({ recipient: 'add', newAccount: '', amount: '12.34' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.error).toBe('Please select a recipient');
+  });
+
+  it('shows the server message and clears submitting when a deposit fails', () => {
+    api.transaction.and.returnValue(throwError(() => ({
+      error: { message: 'Routing number rejected' },
+      status: 400
+    })));
+    component.depositForm.patchValue({
+      account: 'add', newAccount: '1234567890', newRouting: '123456789', amount: '12.34'
+    });
+    component.submitDeposit();
+    expect(component.submitting).toBeFalse();
+    expect(component.error).toBe('Deposit failed: Routing number rejected');
+  });
+
+  it('rejects a deposit when the stored account value is malformed JSON', () => {
+    component.depositForm.patchValue({ account: 'not-json', amount: '12.34' });
+    component.submitDeposit();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.error).toBe('Invalid routing number');
+  });
+
   it('validates and rejects an invalid deposit', () => {
     component.depositForm.patchValue({
       account: 'add', newAccount: '1234567890', newRouting: '883745000', amount: '2'
