@@ -87,8 +87,12 @@ test-unit:
 	mvn test
 	for SERVICE in "accounts/contacts" "accounts/userservice"; \
 	do \
-		(cd src/$$SERVICE && uv run pytest -v -p no:warnings); \
+		(cd src/$$SERVICE && uv run pytest -v -p no:warnings --cov=. --cov-report=xml --cov-report=term); \
 	done
+	# src/frontend joins once its test suite lands (pytest exits 5 with no tests collected)
+	if [ -d src/frontend/tests ]; then \
+		(cd src/frontend && uv run pytest -v -p no:warnings --cov=. --cov-report=xml --cov-report=term); \
+	fi
 
 upgrade-py-deps:
 	for SERVICE in "frontend" "accounts/contacts" "accounts/userservice" "loadgenerator"; \
