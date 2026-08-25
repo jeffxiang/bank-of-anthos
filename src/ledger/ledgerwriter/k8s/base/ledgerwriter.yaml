@@ -62,8 +62,9 @@ spec:
             fieldRef:
               fieldPath: metadata.namespace
         # Comma-separated account numbers rejected by recipient screening.
+        # Leave empty unless real sanctioned accounts need to be blocked.
         - name: SCREENED_ACCOUNTS
-          value: "1055757655"
+          value: ""
         # Optional Slack incoming webhook used to report application errors.
         # Create with: kubectl create secret generic app-slack-webhook \
         #   --from-literal=webhookURL=<YOUR_SLACK_WEBHOOK_URL>
