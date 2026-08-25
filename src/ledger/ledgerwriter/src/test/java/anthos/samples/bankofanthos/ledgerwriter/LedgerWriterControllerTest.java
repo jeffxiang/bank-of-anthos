@@ -18,6 +18,8 @@ package anthos.samples.bankofanthos.ledgerwriter;
 
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION;
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_INSUFFICIENT_BALANCE;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_INVALID_AMOUNT;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_RECIPIENT_SCREENED;
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -25,6 +27,7 @@ import static org.mockito.Mockito.contains;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -285,6 +288,105 @@ class LedgerWriterControllerTest {
                 actualResult.getBody());
         assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
         verify(slackNotifier).notifyError(contains(EXCEPTION_MESSAGE));
+    }
+
+    @Test
+    @DisplayName("Given the recipient fails screening, return HTTP Status 400 " +
+            "with the SCREEN-403 message, alert Slack and never touch the ledger")
+    void addTransactionWhenRecipientScreened(TestInfo testInfo) {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getRequestUuid()).thenReturn(testInfo.getDisplayName());
+        doThrow(new IllegalArgumentException(
+                EXCEPTION_MESSAGE_RECIPIENT_SCREENED)).when(
+                        transactionValidator).validateTransaction(
+                        LOCAL_ROUTING_NUM, AUTHED_ACCOUNT_NUM, transaction);
+
+        // When
+        final ResponseEntity actualResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(EXCEPTION_MESSAGE_RECIPIENT_SCREENED,
+                actualResult.getBody());
+        assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_RECIPIENT_SCREENED));
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    @DisplayName("Given a screening rejection, the request uuid is not cached, " +
+            "so a retry of the same transaction can still succeed")
+    void addTransactionWhenRecipientScreenedDoesNotCacheRequestUuid(TestInfo testInfo) {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getFromRoutingNum()).thenReturn(NON_LOCAL_ROUTING_NUM);
+        when(transaction.getRequestUuid()).thenReturn(testInfo.getDisplayName());
+        doThrow(new IllegalArgumentException(
+                EXCEPTION_MESSAGE_RECIPIENT_SCREENED)).doNothing().when(
+                        transactionValidator).validateTransaction(
+                        LOCAL_ROUTING_NUM, AUTHED_ACCOUNT_NUM, transaction);
+
+        // When
+        final ResponseEntity screenedResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+        final ResponseEntity retryResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertEquals(HttpStatus.BAD_REQUEST, screenedResult.getStatusCode());
+        assertEquals(EXCEPTION_MESSAGE_RECIPIENT_SCREENED,
+                screenedResult.getBody());
+        assertEquals(HttpStatus.CREATED, retryResult.getStatusCode());
+        verify(transactionRepository, times(1)).save(transaction);
+    }
+
+    @Test
+    @DisplayName("Given the transaction amount is not positive, " +
+            "return HTTP Status 400 and never touch the ledger")
+    void addTransactionWhenAmountInvalid(TestInfo testInfo) {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getRequestUuid()).thenReturn(testInfo.getDisplayName());
+        doThrow(new IllegalArgumentException(
+                EXCEPTION_MESSAGE_INVALID_AMOUNT)).when(
+                        transactionValidator).validateTransaction(
+                        LOCAL_ROUTING_NUM, AUTHED_ACCOUNT_NUM, transaction);
+
+        // When
+        final ResponseEntity actualResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(EXCEPTION_MESSAGE_INVALID_AMOUNT,
+                actualResult.getBody());
+        assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_INVALID_AMOUNT));
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    @DisplayName("Given HTTP request 'Authorization' header is null, " +
+            "alert Slack and never validate or persist the transaction")
+    void addTransactionWhenBearerTokenNullAlertsSlack() {
+        // When
+        final ResponseEntity actualResult =
+                ledgerWriterController.addTransaction(null, transaction);
+
+        // Then
+        assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL));
+        verifyNoInteractions(transactionValidator);
+        verifyNoInteractions(transactionRepository);
     }
 
     @Test
