@@ -36,6 +36,7 @@ from userservice.tests.constants import (
     INVALID_USERNAMES,
     SLACK_CHANNEL,
     SLACK_WEBHOOK_URL,
+    get_random_string,
 )
 
 
@@ -310,3 +311,74 @@ class TestUserservice(unittest.TestCase):
                     'username must contain 2-15 alphanumeric characters or underscores'.encode(),
                     'username {} returned unexpected error message'.format(invalid_username)
                 )
+
+    def test_create_user_201_status_code_unicode_pii_preserved(self):
+        """test creating a user whose PII fields contain unicode and emoji"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        # create example user request with unicode/emoji values in PII fields
+        example_user_request = EXAMPLE_USER_REQUEST.copy()
+        unicode_pii = {
+            'firstname': 'Jösé🙂',
+            'lastname': 'Ñoël',
+            'address': '123 Ünicode Straße 🏦',
+            'state': 'CÁ',
+        }
+        example_user_request.update(unicode_pii)
+        # send request to test client
+        response = self.test_app.post('/users', data=example_user_request)
+        # assert 201 response code
+        self.assertEqual(response.status_code, 201)
+        # assert PII was stored unchanged by sanitization
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        for field, value in unicode_pii.items():
+            self.assertEqual(user_object[field], value)
+
+    def test_create_user_201_status_code_username_length_boundaries(self):
+        """test creating users with usernames at the 2 and 15 character bounds"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        # test the shortest and longest allowed usernames
+        for valid_username in [get_random_string(2), get_random_string(15)]:
+            example_user_request = EXAMPLE_USER_REQUEST.copy()
+            example_user_request['username'] = valid_username
+            # send request to test client
+            response = self.test_app.post('/users', data=example_user_request)
+            self.assertEqual(response.status_code, 201,
+                             'username {} returned incorrect status code'.format(valid_username))
+            user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+            self.assertEqual(user_object['username'], valid_username)
+
+    @patch('userservice.userservice.requests.post')
+    def test_login_sql_error_500_status_code_error_message(self, mock_post):
+        """test logging in when the user lookup throws a SQL error"""
+        self.flask_app.config['SLACK_WEBHOOK_URL'] = SLACK_WEBHOOK_URL
+        # mock get_user to throw SQLAlchemyError
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        # send request to test client
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert 500 response
+        self.assertEqual(response.status_code, 500)
+        # assert we get correct error message
+        self.assertEqual(response.data, b'failed to retrieve user information')
+        # assert the failure was reported to Slack
+        self.assertIn('[userservice] /login failed',
+                      mock_post.call_args.kwargs['json']['text'])
+
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_200_status_code_token_signs_account_and_expiry(self, _mock_checkpw):
+        """test the signed token carries the account id and configured expiry"""
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        # set private key and token expiry
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        self.flask_app.config['EXPIRY_SECONDS'] = 120
+        # send request to test client
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 200)
+        # decode payload using public key
+        decoded_value = jwt.decode(algorithms='RS256',
+                                   jwt=response.json['token'],
+                                   key=EXAMPLE_PUBLIC_KEY,)
+        # assert the token is scoped to the user's account for the configured window
+        self.assertEqual(decoded_value['acct'], EXAMPLE_USER['accountid'])
+        self.assertEqual(decoded_value['exp'] - decoded_value['iat'], 120)
