@@ -33,10 +33,13 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# MarkupSafe's optional C extension is incompatible with the Python 3.14
-# prerelease used by the test environment.
-from markupsafe import _native
-markupsafe._escape_inner = _native._escape_inner
+# Fall back to MarkupSafe's pure-Python implementation when its optional C
+# extension is unusable (as on the Python 3.14 prerelease).
+try:
+    markupsafe.escape('')
+except SystemError:
+    from markupsafe import _native
+    markupsafe._escape_inner = _native._escape_inner
 
 # pylint: disable=wrong-import-position
 from frontend import create_app  # noqa: E402
@@ -70,9 +73,6 @@ class TestFrontend(unittest.TestCase):
     def setUp(self):
         """Setup Flask TestClient with a mocked public key and env vars"""
         self.private_key, self.public_key = _generate_keypair()
-        _, other_public_key = _generate_keypair()
-        self.other_public_key = other_public_key
-
         # mock reading the userservice public key from disk
         with patch('frontend.open', mock_open(read_data=self.public_key)):
             # mock env vars
