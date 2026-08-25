@@ -209,6 +209,41 @@ describe('HomeComponent', () => {
     }));
   }));
 
+  it('rejects a payment amount below the minimum without calling the API', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '0' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.submitting).toBeFalse();
+    expect(component.paymentForm.get('amount')!.touched).toBeTrue();
+  });
+
+  it('rejects a payment to a recipient that is not a known contact', () => {
+    component.paymentForm.patchValue({ recipient: '9999999999', amount: '12.34' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.error).toBe('Please select a recipient');
+  });
+
+  it('rejects a new recipient without an account number', () => {
+    component.paymentForm.patchValue({ recipient: 'add', newAccount: '', amount: '12.34' });
+    component.submitPayment();
+    expect(api.addContact).not.toHaveBeenCalled();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.error).toBe('Please select a recipient');
+  });
+
+  it('ignores a duplicate submit while a payment is in flight', () => {
+    const response = new Subject<string>();
+    api.transaction.and.returnValue(response);
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    component.submitPayment();
+    expect(api.transaction).toHaveBeenCalledTimes(1);
+    response.error({ error: { message: 'Insufficient balance' }, status: 400 });
+    expect(component.submitting).toBeFalse();
+    expect(component.error).toBe('Payment failed: Insufficient balance');
+  });
+
   it('validates and rejects an invalid deposit', () => {
     component.depositForm.patchValue({
       account: 'add', newAccount: '1234567890', newRouting: '883745000', amount: '2'
