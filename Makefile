@@ -85,9 +85,13 @@ test-e2e:
 
 test-unit:
 	mvn test
-	for SERVICE in "accounts/contacts" "accounts/userservice"; \
+	for SERVICE in "accounts/contacts" "accounts/userservice" "frontend"; \
 	do \
-		(cd src/$$SERVICE && uv run pytest -v -p no:warnings); \
+		if [ -d src/$$SERVICE/tests ]; then \
+			(cd src/$$SERVICE && uv run pytest -v -p no:warnings --cov=. --cov-report=xml --cov-report=term); \
+		else \
+			echo "Skipping src/$$SERVICE: no tests directory"; \
+		fi; \
 	done
 
 upgrade-py-deps:

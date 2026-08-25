@@ -1,0 +1,103 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Unit Tests and Coverage
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test-unit:
+    name: Java and Python unit tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      # Report-only for now: coverage plumbing is new, so failures here must not
+      # block PRs until baselines are established.
+      - name: make test-unit
+        continue-on-error: true
+        run: make test-unit
+
+      - name: Coverage summary
+        continue-on-error: true
+        run: |
+          for REPORT in src/ledger/*/target/site/jacoco/jacoco.csv; do
+            [ -f "$REPORT" ] || continue
+            echo "== $REPORT"
+            awk -F, 'NR>1 {miss+=$4; cov+=$5; bmiss+=$6; bcov+=$7}
+                     END {if (miss+cov) printf "instructions: %.1f%%\n", 100*cov/(miss+cov);
+                          if (bmiss+bcov) printf "branches:     %.1f%%\n", 100*bcov/(bmiss+bcov)}' "$REPORT"
+          done
+          for REPORT in src/accounts/*/coverage.xml src/frontend/coverage.xml; do
+            [ -f "$REPORT" ] || continue
+            echo "== $REPORT"
+            grep -o 'line-rate="[^"]*"' "$REPORT" | head -1
+          done
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-jvm-python
+          path: |
+            src/ledger/*/target/site/jacoco/**
+            src/accounts/*/coverage.xml
+            src/frontend/coverage.xml
+          if-no-files-found: ignore
+
+  test-angular:
+    name: Angular unit tests
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: src/ui-angular
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 16.10
+        uses: actions/setup-node@v4
+        with:
+          node-version: '16.10.0'
+          cache: 'npm'
+          cache-dependency-path: src/ui-angular/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      # Report-only for now, same rationale as the Java/Python job.
+      - name: npm run test:coverage
+        continue-on-error: true
+        run: npm run test:coverage
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-ui-angular
+          path: src/ui-angular/coverage/**
+          if-no-files-found: ignore
