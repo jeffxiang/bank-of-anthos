@@ -82,6 +82,16 @@ Keep two temp copies of the manifest (e.g. `/tmp/lw/repro.yaml` with the old val
 - `kubectl apply -f <manifest>` **overwrites** any earlier `kubectl set env deployment --all ENABLE_TRACING=false ENABLE_METRICS=false`, so the new Java pod crashloops on `Your default credentials were not found` (Stackdriver). Bake `ENABLE_TRACING/ENABLE_METRICS: "false"` into the temp manifests.
 - Confirm the value actually reached the running pod with `kubectl exec deploy/ledgerwriter -- printenv | grep SCREENED_ACCOUNTS` before trusting a UI result, and count log hits per pod (`kubectl logs deploy/ledgerwriter | grep -c 'SCREEN-403'`) to distinguish pre/post-fix pods.
 
+### Flipping the value without a rollout
+Every `kubectl apply` above costs a full ledgerwriter rollout (Spring Boot's graceful shutdown plus a JVM/context start), which dominates the run when the same value is flipped repeatedly. Instead, keep both variants warm and switch the `ledgerwriter` Service between them — no pod restart, and the change applies to the very next request:
+- Generate two Deployments from the live one (`kubectl get deployment ledgerwriter -o json`), renaming them `ledgerwriter-screened` / `ledgerwriter-clean`, overriding `SCREENED_ACCOUNTS`, and adding a `variant: screened|clean` label to both `spec.selector.matchLabels` and the pod template.
+- Scale the original `ledgerwriter` Deployment to 0 so only the labelled variants back the Service, then switch with `kubectl patch service ledgerwriter --type merge -p '{"spec":{"selector":{"variant":"clean"}}}'`.
+- Verify the switch server-side rather than trusting the selector alone: the declining pod logs `Invalid transaction: Recipient screening declined` and the other logs `Submitted transaction successfully`.
+- Restore by deleting the variants, removing `variant` from the Service selector, and scaling the original Deployment back to 1.
+
+## Resetting polluted ledger data
+`transactions` carries `prevent_delete`/`prevent_update` rules (append-only ledger), so scripted probes leave permanent rows that show up in balances and history. To clean up: `DROP RULE prevent_delete ON transactions;`, delete the rows, recreate the rule, then `kubectl rollout restart deploy/balancereader deploy/transactionhistory` — both cache aggressively and keep serving the old balance/history otherwise. Note `from_acct`/`to_acct` are `character(10)`, so match with `like '1055757655%'` rather than `=`.
+
 ## Devin Secrets Needed
 - None for the standard flows. All app credentials are demo values baked into the manifests.
 - `SLACK_WEBHOOK_URL` (session- or repo-scoped) only when testing the Slack error-notification feature against a real workspace. Note the scope actually granted may differ from what was requested — check `list_secrets` for the qualified reference before using it.
