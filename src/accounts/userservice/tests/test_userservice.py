@@ -288,6 +288,100 @@ class TestUserservice(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, b'failed to create user')
 
+    def test_create_user_201_unicode_and_boundary_pii_stored_without_leaking(self):
+        """test unicode and boundary-length PII fields are stored verbatim and not echoed"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        example_user_request = EXAMPLE_USER_REQUEST.copy()
+        # 15 characters is the upper bound for a valid username
+        example_user_request['username'] = 'a' * 15
+        example_user_request['firstname'] = 'Zoë'
+        example_user_request['lastname'] = '仮名'
+        example_user_request['address'] = 'Ünter den Linden 1' + 'x' * 500
+        example_user_request['ssn'] = '000-00-0000'
+        response = self.test_app.post('/users', data=example_user_request)
+        self.assertEqual(response.status_code, 201)
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        # unicode PII must survive sanitization unmangled
+        self.assertEqual(user_object['firstname'], 'Zoë')
+        self.assertEqual(user_object['lastname'], '仮名')
+        self.assertEqual(user_object['address'], example_user_request['address'])
+        # the response must not echo back any PII or password material
+        body = response.data.decode()
+        for secret in (example_user_request['ssn'],
+                       example_user_request['password'],
+                       example_user_request['address'],
+                       example_user_request['username']):
+            self.assertNotIn(secret, body)
+        self.assertNotIn(b'passhash', response.data)
+
+    def test_create_user_whitespace_only_pii_fields_are_accepted(self):
+        """test whitespace-only and malformed PII values are not rejected
+
+        Documents current behaviour: `__validate_new_user` short-circuits on the
+        truthy raw value, so whitespace-only fields pass the empty-value check,
+        and ssn/zip/birthday are never format-validated.
+        """
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        example_user_request = EXAMPLE_USER_REQUEST.copy()
+        example_user_request['address'] = '   '
+        example_user_request['state'] = '\t'
+        example_user_request['ssn'] = ' '
+        example_user_request['zip'] = 'not-a-zip'
+        example_user_request['birthday'] = '9999-99-99'
+        response = self.test_app.post('/users', data=example_user_request)
+        self.assertEqual(response.status_code, 201)
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        self.assertEqual(user_object['zip'], 'not-a-zip')
+        self.assertEqual(user_object['birthday'], '9999-99-99')
+        self.assertEqual(user_object['ssn'].strip(), '')
+
+    @patch('userservice.userservice.requests.post')
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_jwt_signing_error_no_token_and_no_key_material_logged(
+        self, _mock_checkpw, mock_post
+    ):
+        """test a JWT signing failure yields no token and logs no key material
+
+        Documents current behaviour: unlike the DB/lookup/password branches, a
+        signing failure is not caught, so it escapes the handler unlogged and
+        without a Slack alert.
+        """
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        self.flask_app.config['SLACK_WEBHOOK_URL'] = SLACK_WEBHOOK_URL
+        signing_error = ValueError(
+            'could not sign with key {}'.format(EXAMPLE_PRIVATE_KEY.decode())
+        )
+        with patch('userservice.userservice.jwt.encode', side_effect=signing_error):
+            with self.assertLogs('userservice.userservice', level='DEBUG') as logs:
+                with self.assertRaises(ValueError):
+                    self.test_app.get(
+                        '/login', query_string=EXAMPLE_USER_REQUEST.copy()
+                    )
+        logged = '\n'.join(logs.output)
+        self.assertNotIn('PRIVATE KEY', logged)
+        self.assertNotIn('Login Successful.', logged)
+        mock_post.assert_not_called()
+
+    def test_login_db_error_500_generic_message_no_pii(self):
+        """test a DB failure during login returns a generic error with no PII"""
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError(
+            'connection to accounts-db as user jdoe failed'
+        )
+        with self.assertLogs('userservice.userservice', level='INFO') as logs:
+            response = self.test_app.get(
+                '/login', query_string=EXAMPLE_USER_REQUEST.copy()
+            )
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data, b'failed to retrieve user information')
+        # neither the raw driver error nor credentials may reach the client
+        self.assertNotIn(b'accounts-db', response.data)
+        logged = '\n'.join(logs.output)
+        self.assertNotIn(EXAMPLE_USER_REQUEST['password'], logged)
+        self.assertNotIn(EXAMPLE_USER_REQUEST['ssn'], logged)
+
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """
         # mock return value of get_user which checks if user exists as None
