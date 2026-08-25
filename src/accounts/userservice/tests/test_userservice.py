@@ -36,6 +36,7 @@ from userservice.tests.constants import (
     INVALID_USERNAMES,
     SLACK_CHANNEL,
     SLACK_WEBHOOK_URL,
+    generate_rsa_key,
 )
 
 
@@ -287,6 +288,80 @@ class TestUserservice(unittest.TestCase):
         response = self.test_app.post('/users', data=EXAMPLE_USER_REQUEST.copy())
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, b'failed to create user')
+
+    def test_login_sql_error_500_status_code_error_message(self):
+        """test logging in when the user lookup raises a SQL error"""
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert 500 response
+        self.assertEqual(response.status_code, 500)
+        # assert we get correct error message
+        self.assertEqual(response.data, b'failed to retrieve user information')
+
+    @patch('userservice.userservice.requests.post')
+    def test_slack_notification_sent_on_login_failure(self, mock_post):
+        """test a Slack notification is posted when a login fails"""
+        self.flask_app.config['SLACK_WEBHOOK_URL'] = SLACK_WEBHOOK_URL
+        self.flask_app.config['SLACK_CHANNEL'] = SLACK_CHANNEL
+        # mock return value of get_user which checks if user exists as None
+        self.mocked_db.return_value.get_user.return_value = None
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert behavior on failure is unchanged
+        self.assertEqual(response.status_code, 404)
+        # assert the webhook was called with the endpoint and channel
+        self.assertEqual(mock_post.call_args.kwargs['url'], SLACK_WEBHOOK_URL)
+        payload = mock_post.call_args.kwargs['json']
+        self.assertEqual(payload['channel'], SLACK_CHANNEL)
+        self.assertIn('[userservice] /login failed', payload['text'])
+
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_token_claims_and_expiry(self, _mock_checkpw):
+        """test the signed token carries the account claim and configured expiry"""
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        self.flask_app.config['EXPIRY_SECONDS'] = 600
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 200)
+        decoded_value = jwt.decode(algorithms='RS256',
+                                   jwt=response.json['token'],
+                                   key=EXAMPLE_PUBLIC_KEY,)
+        # assert the account claim is taken from the database record
+        self.assertEqual(decoded_value['acct'], EXAMPLE_USER['accountid'])
+        # assert the token expires after the configured number of seconds
+        self.assertEqual(decoded_value['exp'] - decoded_value['iat'], 600)
+
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_token_not_verifiable_with_unrelated_public_key(self, _mock_checkpw):
+        """test a token signed by this service fails verification with another key"""
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 200)
+        _, unrelated_public_key = generate_rsa_key()
+        with self.assertRaises(jwt.exceptions.InvalidSignatureError):
+            jwt.decode(algorithms='RS256',
+                       jwt=response.json['token'],
+                       key=unrelated_public_key,)
+
+    def test_create_user_sanitizes_pii_fields_before_storage(self):
+        """test markup in PII fields is sanitized before reaching the database"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        example_user = EXAMPLE_USER_REQUEST.copy()
+        example_user['firstname'] = '<script>alert("xss")</script>John'
+        example_user['address'] = '<img src=x onerror=alert(1)>1600 Amphitheatre Parkway'
+        response = self.test_app.post('/users', data=example_user)
+        self.assertEqual(response.status_code, 201)
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        # assert no raw markup is persisted
+        self.assertNotIn('<script>', user_object['firstname'])
+        self.assertIn('John', user_object['firstname'])
+        self.assertNotIn('<img', user_object['address'])
+        self.assertIn('1600 Amphitheatre Parkway', user_object['address'])
 
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """
