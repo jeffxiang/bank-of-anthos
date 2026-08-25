@@ -209,6 +209,47 @@ describe('HomeComponent', () => {
     }));
   }));
 
+  it('rejects payment amounts at or below zero without calling the ledger', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '0' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.paymentForm.touched).toBeTrue();
+
+    component.paymentForm.patchValue({ amount: '-5' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.message).toBe('');
+  });
+
+  it('rejects a new recipient whose account number is not ten digits', () => {
+    component.paymentForm.patchValue({
+      recipient: 'add', newAccount: '12345', amount: '12.34'
+    });
+    component.submitPayment();
+    expect(api.addContact).not.toHaveBeenCalled();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.paymentForm.get('newAccount')?.valid).toBeFalse();
+  });
+
+  it('shows an error when the selected recipient is unknown', () => {
+    component.paymentForm.patchValue({ recipient: '9999999999', amount: '12.34' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.error).toBe('Please select a recipient');
+  });
+
+  it('ignores a second payment submission while one is in flight', () => {
+    const response = new Subject<string>();
+    api.transaction.and.returnValue(response);
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    component.submitPayment();
+    expect(api.transaction).toHaveBeenCalledTimes(1);
+    response.next('ok');
+    response.complete();
+    expect(component.submitting).toBeFalse();
+  });
+
   it('validates and rejects an invalid deposit', () => {
     component.depositForm.patchValue({
       account: 'add', newAccount: '1234567890', newRouting: '883745000', amount: '2'
