@@ -8,7 +8,7 @@ import { MatCardModule } from '@angular/material/card';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatSelectModule } from '@angular/material/select';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { SignupComponent } from './signup.component';
 import { ApiService } from '../api.service';
 import { AuthService } from '../auth/auth.service';
@@ -62,6 +62,47 @@ describe('SignupComponent', () => {
 
     const errors = Array.from(fixture.nativeElement.querySelectorAll('mat-error')) as HTMLElement[];
     expect(errors.map(error => error.textContent?.trim())).toEqual(['Passwords do not match.']);
+  });
+
+  const INVALID_USERNAMES = ['', 'a', 'a'.repeat(16), 'has space', 'bad-dash', '🐻user', 'user仮'];
+
+  const fillValidForm = () => component.form.patchValue({
+    username: 'jdoe', password: 'secret', passwordRepeat: 'secret',
+    firstname: 'Jane', lastname: 'Doe', birthday: '1990-01-01'
+  });
+
+  it('rejects usernames outside the allowed pattern', () => {
+    for (const username of INVALID_USERNAMES) {
+      fillValidForm();
+      component.form.patchValue({ username });
+      component.submit();
+      expect(component.form.controls.username.invalid).withContext(username).toBeTrue();
+    }
+    expect(api.createUser).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the server message when account creation fails', () => {
+    fillValidForm();
+    api.createUser.and.returnValue(throwError(() => ({ error: 'Error: user already exists' })));
+    component.submit();
+    expect(component.error).toBe('Error: user already exists');
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('falls back to a generic message when the failure has no server message', () => {
+    fillValidForm();
+    api.createUser.and.returnValue(throwError(() => ({})));
+    component.submit();
+    expect(component.error).toBe('Error: Account creation failed');
+  });
+
+  it('reports a failed login after the account is created', () => {
+    fillValidForm();
+    api.createUser.and.returnValue(of({}));
+    auth.login.and.returnValue(throwError(() => new Error('invalid login')));
+    component.submit();
+    expect(component.error).toBe('Account created, but login failed');
+    expect(component.submitting).toBeFalse();
   });
 
   it('accepts valid signup fields', () => {
