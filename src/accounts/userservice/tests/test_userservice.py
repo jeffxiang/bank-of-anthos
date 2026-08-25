@@ -36,7 +36,20 @@ from userservice.tests.constants import (
     INVALID_USERNAMES,
     SLACK_CHANNEL,
     SLACK_WEBHOOK_URL,
+    generate_rsa_key,
 )
+
+# PII fields whose values must be present and non-whitespace
+PII_FIELDS = ['firstname', 'lastname', 'address', 'state', 'zip', 'ssn']
+
+# Whitespace-only values that must not pass PII validation
+BLANK_PII_VALUES = [
+    ' ',           # single space
+    '   ',         # multiple spaces
+    '\t',          # tab
+    '\n',          # newline
+    '\u00a0',      # non-breaking space
+]
 
 
 class TestUserservice(unittest.TestCase):
@@ -287,6 +300,81 @@ class TestUserservice(unittest.TestCase):
         response = self.test_app.post('/users', data=EXAMPLE_USER_REQUEST.copy())
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, b'failed to create user')
+
+    def test_create_user_empty_pii_400_status_code_error_message(self):
+        """test empty values for PII fields are rejected"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        for field in PII_FIELDS:
+            example_user = EXAMPLE_USER_REQUEST.copy()
+            example_user[field] = ''
+            response = self.test_app.post('/users', data=example_user)
+            self.assertEqual(
+                response.status_code, 400,
+                'empty {} returned incorrect status code'.format(field)
+            )
+            self.assertEqual(response.data, b'missing value for input field(s)')
+            self.mocked_db.return_value.add_user.assert_not_called()
+
+    def test_create_user_whitespace_only_pii_is_currently_accepted(self):
+        """characterize current behavior: whitespace-only PII passes validation
+
+        `__validate_new_user` short-circuits on the truthy raw value, so
+        whitespace-only PII is stored verbatim instead of being rejected.
+        """
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        for blank_value in BLANK_PII_VALUES:
+            self.mocked_db.return_value.add_user.reset_mock()
+            example_user = EXAMPLE_USER_REQUEST.copy()
+            example_user['ssn'] = blank_value
+            response = self.test_app.post('/users', data=example_user)
+            self.assertEqual(
+                response.status_code, 201,
+                'ssn={!r} returned unexpected status code'.format(blank_value)
+            )
+            user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+            self.assertEqual(user_object['ssn'].strip(), '')
+
+    def test_create_user_pii_markup_is_sanitized_before_persisting(self):
+        """test markup and unicode in PII fields are sanitized, not stored raw"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        example_user = EXAMPLE_USER_REQUEST.copy()
+        example_user['firstname'] = '<script>alert(1)</script>Jo仮'
+        example_user['address'] = '1 Main St <img src=x onerror=alert(1)>🏦'
+        response = self.test_app.post('/users', data=example_user)
+        self.assertEqual(response.status_code, 201)
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        self.assertNotIn('<script>', user_object['firstname'])
+        self.assertNotIn('<img', user_object['address'])
+        # non-markup unicode is preserved
+        self.assertIn('Jo仮', user_object['firstname'])
+        self.assertIn('🏦', user_object['address'])
+
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_unusable_signing_key_raises_and_returns_no_token(self, _mock_checkpw):
+        """test a malformed private key fails signing instead of issuing a token"""
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        # simulate a corrupted mounted signing key
+        self.flask_app.config['PRIVATE_KEY'] = 'not-a-private-key'
+        with self.assertRaises(jwt.exceptions.PyJWTError):
+            self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_token_not_verifiable_with_foreign_public_key(self, _mock_checkpw):
+        """test issued token is bound to the configured signing key"""
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 200)
+        token = response.json['token']
+        _, foreign_public_key = generate_rsa_key()
+        with self.assertRaises(jwt.exceptions.InvalidSignatureError):
+            jwt.decode(algorithms='RS256', jwt=token, key=foreign_public_key)
+        # the token still verifies with the matching public key
+        decoded_value = jwt.decode(algorithms='RS256', jwt=token, key=EXAMPLE_PUBLIC_KEY)
+        self.assertEqual(decoded_value['acct'], EXAMPLE_USER['accountid'])
 
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """
