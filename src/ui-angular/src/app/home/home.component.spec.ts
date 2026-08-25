@@ -209,6 +209,47 @@ describe('HomeComponent', () => {
     }));
   }));
 
+  it('rejects a payment with a non-positive or missing amount', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '0' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.paymentForm.touched).toBeTrue();
+
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('rejects a payment to a recipient that is not a known contact', () => {
+    component.paymentForm.patchValue({ recipient: '9999999999', amount: '12.34' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.error).toBe('Please select a recipient');
+  });
+
+  it('ignores a second payment submission while one is in flight', () => {
+    const response = new Subject<string>();
+    api.transaction.and.returnValue(response);
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    expect(component.submitting).toBeTrue();
+    component.submitPayment();
+    expect(api.transaction).toHaveBeenCalledTimes(1);
+    response.next('ok');
+    response.complete();
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('rejects a deposit above the maximum amount', () => {
+    component.depositForm.patchValue({
+      account: 'add', newAccount: '1234567890', newRouting: '123456789', amount: '500001'
+    });
+    component.submitDeposit();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.depositForm.touched).toBeTrue();
+  });
+
   it('validates and rejects an invalid deposit', () => {
     component.depositForm.patchValue({
       account: 'add', newAccount: '1234567890', newRouting: '883745000', amount: '2'
