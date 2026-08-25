@@ -18,6 +18,8 @@ package anthos.samples.bankofanthos.transactionhistory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.initMocks;
 
@@ -27,6 +29,7 @@ import com.auth0.jwt.interfaces.Claim;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.google.common.cache.CacheStats;
 import com.google.common.cache.LoadingCache;
+import com.google.common.util.concurrent.UncheckedExecutionException;
 import io.micrometer.core.instrument.Clock;
 import io.micrometer.core.lang.Nullable;
 import io.micrometer.stackdriver.StackdriverConfig;
@@ -69,6 +72,8 @@ class TransactionHistoryControllerTest {
     private static final String NON_AUTHED_ACCOUNT_NUM = "9876543210";
     private static final String BEARER_TOKEN = "Bearer abc";
     private static final String TOKEN = "abc";
+    private static final String UNAUTHORIZED_MESSAGE = "not authorized";
+    private static final String CACHE_ERROR_MESSAGE = "cache error";
     private static final String PUBLIC_KEY_PATH = "path/";
 
     @BeforeEach
@@ -217,6 +222,59 @@ class TransactionHistoryControllerTest {
         // Then
         assertNotNull(actualResult);
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given the cache loader throws an unchecked error, return 500")
+    void getTransactionsFailsWhenCacheThrowsUncheckedExecutionException() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(cache.get(AUTHED_ACCOUNT_NUM)).thenThrow(UncheckedExecutionException.class);
+
+        // When
+        final ResponseEntity actualResult = transactionHistoryController
+            .getTransactions(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+        assertEquals(CACHE_ERROR_MESSAGE, actualResult.getBody());
+    }
+
+    @Test
+    @DisplayName("Given the token has no account claim, return 401 without reading the cache")
+    void getTransactionsFailsWhenTokenHasNoAccountClaim() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(null);
+
+        // When
+        final ResponseEntity actualResult = transactionHistoryController
+            .getTransactions(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        assertEquals(UNAUTHORIZED_MESSAGE, actualResult.getBody());
+        verify(cache, never()).get(AUTHED_ACCOUNT_NUM);
+    }
+
+    @Test
+    @DisplayName("Given an authorization header without the Bearer prefix, "
+            + "verify the raw token and return the cached transactions")
+    void getTransactionsSucceedsWhenTokenHasNoBearerPrefix() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(cache.get(AUTHED_ACCOUNT_NUM)).thenReturn(transactions);
+
+        // When
+        final ResponseEntity actualResult = transactionHistoryController
+            .getTransactions(TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.OK, actualResult.getStatusCode());
+        assertEquals(transactions, actualResult.getBody());
+        verify(verifier).verify(TOKEN);
     }
 
 }
