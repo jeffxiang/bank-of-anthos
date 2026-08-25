@@ -14,8 +14,8 @@
 
 """Tests for frontend payment authentication and error handling."""
 
+import sys
 import unittest
-from sys import modules
 from urllib.parse import parse_qs, urlparse
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -27,15 +27,15 @@ import jwt
 import markupsafe
 import requests
 
-modules["api_call"] = api_call
-modules["traced_thread_pool_executor"] = traced_thread_pool_executor
+sys.modules["api_call"] = api_call
+sys.modules["traced_thread_pool_executor"] = traced_thread_pool_executor
 import frontend.frontend as frontend
 
 try:
     markupsafe._escape_inner("x")
 except SystemError:
     # The MarkupSafe C speedup is broken on this CPython build.
-    markupsafe._escape_inner = markupsafe._native._escape_inner
+    markupsafe._escape_inner = _native._escape_inner
 
 
 def generate_rsa_key_pair():
