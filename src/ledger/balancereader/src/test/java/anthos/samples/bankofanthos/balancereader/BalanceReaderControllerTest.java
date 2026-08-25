@@ -31,9 +31,13 @@ import com.auth0.jwt.interfaces.Claim;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.LoadingCache;
+import com.google.common.util.concurrent.UncheckedExecutionException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.HttpStatus;
@@ -72,6 +76,8 @@ class BalanceReaderControllerTest {
     private static final String NON_AUTHED_ACCOUNT_NUM = "9876543210";
     private static final String BEARER_TOKEN = "Bearer abc";
     private static final String TOKEN = "abc";
+    private static final String EXTERNAL_ROUTING_NUM = "987654321";
+    private static final int AMOUNT = 25;
 
     @BeforeEach
     void setUp() {
@@ -216,6 +222,85 @@ class BalanceReaderControllerTest {
         // Then
         assertNotNull(actualResult);
         assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given the cache throws an unchecked error for an authenticated user, return 500")
+    void getBalance_WhenCacheThrowsUncheckedExecutionException_Returns500() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(cache.get(AUTHED_ACCOUNT_NUM)).thenThrow(
+            new UncheckedExecutionException(new RuntimeException("cache failure")));
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given a null Authorization header, return 401")
+    void getBalance_WhenBearerTokenIsNull_Returns401() {
+        // Given
+        when(verifier.verify((String) null)).thenThrow(JWTVerificationException.class);
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(null, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given a local transaction for cached accounts, " +
+            "debit the sender and credit the receiver in the cache")
+    void transactionCallback_WhenAccountsAreLocalAndCached_UpdatesBalances() {
+        // Given
+        final ArgumentCaptor<LedgerReaderCallback> callbackCaptor =
+            ArgumentCaptor.forClass(LedgerReaderCallback.class);
+        verify(ledgerReader).startWithCallback(callbackCaptor.capture());
+        final ConcurrentMap<String, Long> cacheMap = new ConcurrentHashMap<>();
+        cacheMap.put(AUTHED_ACCOUNT_NUM, BALANCE);
+        cacheMap.put(NON_AUTHED_ACCOUNT_NUM, BALANCE);
+        when(cache.asMap()).thenReturn(cacheMap);
+        final Transaction transaction = mock(Transaction.class);
+        when(transaction.getFromAccountNum()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getFromRoutingNum()).thenReturn(LOCAL_ROUTING_NUM);
+        when(transaction.getToAccountNum()).thenReturn(NON_AUTHED_ACCOUNT_NUM);
+        when(transaction.getToRoutingNum()).thenReturn(LOCAL_ROUTING_NUM);
+        when(transaction.getAmount()).thenReturn(AMOUNT);
+
+        // When
+        callbackCaptor.getValue().processTransaction(transaction);
+
+        // Then
+        verify(cache).put(AUTHED_ACCOUNT_NUM, BALANCE - AMOUNT);
+        verify(cache).put(NON_AUTHED_ACCOUNT_NUM, BALANCE + AMOUNT);
+    }
+
+    @Test
+    @DisplayName("Given a transaction with external routing numbers, " +
+            "do not update the cache")
+    void transactionCallback_WhenRoutingNumsAreExternal_DoesNotUpdateCache() {
+        // Given
+        final ArgumentCaptor<LedgerReaderCallback> callbackCaptor =
+            ArgumentCaptor.forClass(LedgerReaderCallback.class);
+        verify(ledgerReader).startWithCallback(callbackCaptor.capture());
+        final Transaction transaction = mock(Transaction.class);
+        when(transaction.getFromAccountNum()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getFromRoutingNum()).thenReturn(EXTERNAL_ROUTING_NUM);
+        when(transaction.getToAccountNum()).thenReturn(NON_AUTHED_ACCOUNT_NUM);
+        when(transaction.getToRoutingNum()).thenReturn(EXTERNAL_ROUTING_NUM);
+        when(transaction.getAmount()).thenReturn(AMOUNT);
+
+        // When
+        callbackCaptor.getValue().processTransaction(transaction);
+
+        // Then
+        verify(cache, never()).put(anyString(), anyLong());
     }
 
     @Test
