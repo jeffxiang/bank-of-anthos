@@ -66,8 +66,21 @@ A plain `docker build` in `src/frontend` (or `src/accounts/*`) copies a host `.v
 - Validate a webhook URL is live without posting a real message by POSTing a deliberately malformed body: Slack answers `400 invalid_payload` for a live URL and `404 invalid_token` for a rotated one.
 - If the notification payload only sets a channel when a `SLACK_CHANNEL`-style var is non-empty, check the running pod (`kubectl exec ... printenv`) — when unset, messages route to the channel configured on the incoming webhook itself.
 
+## Which UI to test
+The Angular SPA (`src/ui-angular`, port-forward `svc/ui-angular 8081:80`) is the UI to demo/record for feature and bug-fix verification. Treat the Flask UI as a reference implementation only — do not record it. `ui-angular` is not in `kubernetes-manifests/`; build and deploy it explicitly:
+`cd src/ui-angular && eval "$(minikube docker-env)" && docker build -t ui-angular:latest . && kubectl apply -k k8s/base` (the multi-stage npm build takes ~1 min even on 2 CPUs). It needs the `environment-config`, `service-api-config`, `demo-data-config` ConfigMaps from `kubernetes-manifests/config.yaml`.
+
 ## Java service caveat
-The deployed `ledgerwriter` is usually the upstream released image (e.g. `v0.6.10`), so Java-side changes in the working tree are **not** running. Verify with `kubectl get deployment ledgerwriter -o jsonpath='{..image}'` before claiming any Java behavior was tested; a local Maven+Docker rebuild takes well over 15 minutes on 2 CPUs.
+The deployed `ledgerwriter` is usually the upstream released image (e.g. `v0.6.10`), so Java-side changes in the working tree are **not** running. Verify with `kubectl get deployment ledgerwriter -o jsonpath='{..image}'` before claiming any Java behavior was tested. Anything the upstream release predates (e.g. `TransactionValidator`'s recipient screening / SCREEN-403) simply cannot fire on that image, so even a config-only test needs a source build.
+
+Building it locally is much cheaper than expected via jib (~1-2 min, no Dockerfile exists for this service):
+`eval "$(minikube docker-env)" && ./mvnw -q -pl src/ledger/ledgerwriter -am -DskipTests -Dcheckstyle.skip=true compile jib:dockerBuild -Dimage=ledgerwriter:local`
+Then test with a temp copy of the manifest whose `image:` is `ledgerwriter:local` plus `imagePullPolicy: Never`.
+
+## Testing an env-var/config change in a manifest
+Keep two temp copies of the manifest (e.g. `/tmp/lw/repro.yaml` with the old value, `/tmp/lw/fixed.yaml` with the new one) and flip between them with `kubectl apply` — this proves the old value reproduces the bug and the new one fixes it in the same cluster. Two gotchas:
+- `kubectl apply -f <manifest>` **overwrites** any earlier `kubectl set env deployment --all ENABLE_TRACING=false ENABLE_METRICS=false`, so the new Java pod crashloops on `Your default credentials were not found` (Stackdriver). Bake `ENABLE_TRACING/ENABLE_METRICS: "false"` into the temp manifests.
+- Confirm the value actually reached the running pod with `kubectl exec deploy/ledgerwriter -- printenv | grep SCREENED_ACCOUNTS` before trusting a UI result, and count log hits per pod (`kubectl logs deploy/ledgerwriter | grep -c 'SCREEN-403'`) to distinguish pre/post-fix pods.
 
 ## Devin Secrets Needed
 - None for the standard flows. All app credentials are demo values baked into the manifests.
