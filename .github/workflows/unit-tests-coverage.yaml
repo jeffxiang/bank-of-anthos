@@ -1,0 +1,99 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Report-only coverage. This workflow never fails a build and must not be
+# added to branch protection until the baselines have settled.
+name: Unit Tests & Coverage (report-only)
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    name: Coverage report (non-blocking)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Node 16.10
+        uses: actions/setup-node@v4
+        with:
+          node-version: '16.10.0'
+          cache: 'npm'
+          cache-dependency-path: src/ui-angular/package-lock.json
+
+      - name: Run Java + Python unit tests with coverage
+        id: unit
+        continue-on-error: true
+        run: make test-unit
+
+      - name: Install Angular dependencies
+        id: angular-deps
+        continue-on-error: true
+        working-directory: src/ui-angular
+        run: npm ci
+
+      - name: Run Angular unit tests with coverage
+        id: angular
+        continue-on-error: true
+        working-directory: src/ui-angular
+        run: npm run test:coverage
+
+      - name: Summarize coverage
+        if: always()
+        run: python3 .github/scripts/coverage_summary.py >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          if-no-files-found: warn
+          path: |
+            src/ledger/*/target/site/jacoco/**
+            src/frontend/coverage.xml
+            src/accounts/*/coverage.xml
+            src/ui-angular/coverage/**
+
+      - name: Report-only notice
+        if: always()
+        run: |
+          echo "Coverage is report-only; test and coverage failures do not fail this job."
+          echo "unit-tests outcome: ${{ steps.unit.outcome }}"
+          echo "angular-tests outcome: ${{ steps.angular.outcome }}"
