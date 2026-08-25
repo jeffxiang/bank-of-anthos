@@ -15,6 +15,7 @@ import { RuntimeConfigService } from '../runtime-config.service';
 describe('LoginComponent', () => {
   let component: LoginComponent;
   let auth: jasmine.SpyObj<AuthService>;
+  let navigate: jasmine.Spy;
   const config = {
     demoUsername: 'testuser',
     demoPassword: 'bankofanthos',
@@ -41,7 +42,7 @@ describe('LoginComponent', () => {
         { provide: RuntimeConfigService, useValue: config }
       ]
     }).compileComponents();
-    spyOn(TestBed.inject(Router), 'navigate').and.returnValue(Promise.resolve(true));
+    navigate = spyOn(TestBed.inject(Router), 'navigate').and.returnValue(Promise.resolve(true));
     const fixture: ComponentFixture<LoginComponent> = TestBed.createComponent(LoginComponent);
     component = fixture.componentInstance;
   });
@@ -70,5 +71,34 @@ describe('LoginComponent', () => {
       username: '',
       password: ''
     });
+  });
+
+  it('does not attempt login when a required field is missing', () => {
+    component.form.patchValue({ username: '', password: 'bankofanthos' });
+    component.submit();
+    expect(auth.login).not.toHaveBeenCalled();
+    expect(component.form.get('username')!.touched).toBeTrue();
+    expect(component.submitting).toBeFalse();
+    expect(component.error).toBe('');
+  });
+
+  it('keeps the form submittable after a failed login', () => {
+    auth.login.and.returnValue(throwError(() => new Error('invalid login')));
+    component.submit();
+    expect(component.error).toBe('Login Failed');
+    expect(component.submitting).toBeFalse();
+
+    auth.login.and.returnValue(of({ user: 'testuser', acct: '1', name: 'Test User', iat: 1, exp: 2 }));
+    component.submit();
+    expect(component.error).toBe('');
+    expect(navigate).toHaveBeenCalledWith(['/home']);
+  });
+
+  it('passes unicode credentials through unmodified', () => {
+    auth.login.and.returnValue(throwError(() => new Error('invalid login')));
+    component.form.patchValue({ username: '  tëst🙂user  ', password: 'pässwörd🙂' });
+    component.submit();
+    expect(auth.login).toHaveBeenCalledWith('  tëst🙂user  ', 'pässwörd🙂');
+    expect(component.error).toBe('Login Failed');
   });
 });
