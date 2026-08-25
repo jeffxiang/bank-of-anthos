@@ -36,7 +36,14 @@ from userservice.tests.constants import (
     INVALID_USERNAMES,
     SLACK_CHANNEL,
     SLACK_WEBHOOK_URL,
+    generate_rsa_key,
+    get_random_string,
 )
+
+# PII fields other than username carry no format or length validation today
+WHITESPACE_ONLY_PII_FIELDS = ['firstname', 'lastname', 'address', 'state', 'zip', 'ssn']
+# Usernames at the inclusive 2-15 character bounds of the allowed pattern
+VALID_USERNAME_BOUNDS = ['ab', 'a_9', get_random_string(15)]
 
 
 class TestUserservice(unittest.TestCase):
@@ -310,3 +317,55 @@ class TestUserservice(unittest.TestCase):
                     'username must contain 2-15 alphanumeric characters or underscores'.encode(),
                     'username {} returned unexpected error message'.format(invalid_username)
                 )
+
+    def test_create_user_201_status_code_whitespace_only_pii_accepted(self):
+        """test whitespace-only PII fields are accepted, documenting a validation gap"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        for pii_field in WHITESPACE_ONLY_PII_FIELDS:
+            example_user_request = EXAMPLE_USER_REQUEST.copy()
+            example_user_request[pii_field] = '   '
+            response = self.test_app.post('/users', data=example_user_request)
+            # only username is format-checked, so whitespace elsewhere is persisted as-is
+            self.assertEqual(response.status_code, 201,
+                             'field {} returned incorrect status code'.format(pii_field))
+            user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+            self.assertEqual(user_object[pii_field], '   ')
+
+    def test_create_user_201_status_code_username_length_bounds(self):
+        """test usernames at the 2-15 character bounds are accepted"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        for username in VALID_USERNAME_BOUNDS:
+            example_user_request = EXAMPLE_USER_REQUEST.copy()
+            example_user_request['username'] = username
+            response = self.test_app.post('/users', data=example_user_request)
+            self.assertEqual(response.status_code, 201,
+                             'username {} returned incorrect status code'.format(username))
+
+    def test_login_sql_error_500_status_code_error_message(self):
+        """test logging in when the user lookup raises a database error"""
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert 500 response
+        self.assertEqual(response.status_code, 500)
+        # assert we get correct error message and no user information leaks
+        self.assertEqual(response.data, b'failed to retrieve user information')
+
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_token_signed_with_configured_key_only(self, _mock_checkpw):
+        """test the issued token verifies with the matching key only and expires as configured"""
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 200)
+        token = response.json['token']
+        # an unrelated public key must not validate the signature
+        _, other_public_key = generate_rsa_key()
+        with self.assertRaises(jwt.InvalidSignatureError):
+            jwt.decode(algorithms='RS256', jwt=token, key=other_public_key)
+        # the matching public key validates it and the expiry honours the configured window
+        decoded_value = jwt.decode(algorithms='RS256', jwt=token, key=EXAMPLE_PUBLIC_KEY)
+        self.assertEqual(decoded_value['acct'], EXAMPLE_USER['accountid'])
+        self.assertEqual(decoded_value['exp'] - decoded_value['iat'],
+                         self.flask_app.config['EXPIRY_SECONDS'])
