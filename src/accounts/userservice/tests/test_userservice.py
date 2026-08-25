@@ -250,6 +250,76 @@ class TestUserservice(unittest.TestCase):
             'user {} does not exist'.format(example_user_request['username']).encode()
         )
 
+    def test_login_sql_error_500_status_code_error_message(self):
+        """test logging in when the database lookup fails"""
+        # mock get_user to throw SQLAlchemyError
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        # send request to test client
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert 500 response
+        self.assertEqual(response.status_code, 500)
+        # assert we get correct error message
+        self.assertEqual(response.data, b'failed to retrieve user information')
+
+    # mock check pw to return true to simulate correct password
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_token_contains_account_claim_and_expiry(self, _mock_checkpw):
+        """test the signed JWT carries the account id and configured expiry"""
+        example_user = EXAMPLE_USER.copy()
+        self.mocked_db.return_value.get_user.return_value = example_user
+        # set private key
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        # send request to test client
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert 200 response
+        self.assertEqual(response.status_code, 200)
+        # decode payload using public key
+        decoded_value = jwt.decode(algorithms='RS256',
+                                   jwt=response.json['token'],
+                                   key=EXAMPLE_PUBLIC_KEY,)
+        # assert account claim matches the user's account id
+        self.assertEqual(decoded_value['acct'], example_user['accountid'])
+        # assert expiry matches TOKEN_EXPIRY_SECONDS set in setUp
+        self.assertEqual(decoded_value['exp'] - decoded_value['iat'], 3600)
+
+    def test_create_user_escapes_markup_in_pii_fields(self):
+        """test markup in PII fields is escaped before reaching the database"""
+        # mock return value of get_user which checks if user exists as None
+        self.mocked_db.return_value.get_user.return_value = None
+        # mock return value for generate_id from user_db
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        # create example user request with markup in a PII field
+        example_user_request = EXAMPLE_USER_REQUEST.copy()
+        example_user_request['firstname'] = '<script>alert(1)</script>'
+        # send request to test client
+        response = self.test_app.post('/users', data=example_user_request)
+        # assert 201 response code
+        self.assertEqual(response.status_code, 201)
+        # assert the stored firstname contains no raw markup
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        self.assertNotIn('<', user_object['firstname'])
+        self.assertNotIn('>', user_object['firstname'])
+        self.assertIn('&lt;script&gt;', user_object['firstname'])
+
+    def test_create_user_boundary_length_usernames_201(self):
+        """test usernames at the 2 and 15 character validation boundaries"""
+        # mock return value of get_user which checks if user exists as None
+        self.mocked_db.return_value.get_user.return_value = None
+        # mock return value for generate_id from user_db
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        # test both boundary lengths of the 2-15 character rule
+        for boundary_username in ['ab', 'a' * 15]:
+            example_user_request = EXAMPLE_USER_REQUEST.copy()
+            example_user_request['username'] = boundary_username
+            # send request to test client
+            response = self.test_app.post('/users', data=example_user_request)
+            # assert 201 response code
+            self.assertEqual(response.status_code, 201,
+                             'username {} returned incorrect status code'.format(
+                                 boundary_username))
+
     @patch('userservice.userservice.requests.post')
     def test_slack_notification_sent_on_error(self, mock_post):
         """test a Slack notification is posted when a request fails"""
