@@ -18,6 +18,7 @@ package anthos.samples.bankofanthos.ledgerwriter;
 
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION;
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_INSUFFICIENT_BALANCE;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_RECIPIENT_SCREENED;
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -414,5 +415,84 @@ class LedgerWriterControllerTest {
                 EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION,
                 duplicateResult.getBody());
         assertEquals(HttpStatus.BAD_REQUEST, duplicateResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given the recipient is a screened account, " +
+            "return HTTP Status 400 and do not write to the ledger")
+    void addTransactionWhenRecipientScreeningDeclined(TestInfo testInfo) {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getRequestUuid()).thenReturn(testInfo.getDisplayName());
+        doThrow(new IllegalArgumentException(
+                EXCEPTION_MESSAGE_RECIPIENT_SCREENED)).
+                when(transactionValidator).validateTransaction(
+                        LOCAL_ROUTING_NUM, AUTHED_ACCOUNT_NUM, transaction);
+
+        // When
+        final ResponseEntity actualResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(EXCEPTION_MESSAGE_RECIPIENT_SCREENED,
+                actualResult.getBody());
+        assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_RECIPIENT_SCREENED));
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    @DisplayName("Given JWT verification fails, " +
+            "the transaction is never written to the ledger")
+    void addTransactionNotSavedWhenJWTVerificationFails() {
+        // Given
+        when(verifier.verify(TOKEN)).thenThrow(
+                JWTVerificationException.class);
+
+        // When
+        final ResponseEntity actualResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        verifyNoInteractions(transactionRepository);
+        verifyNoInteractions(transactionValidator);
+    }
+
+    @Test
+    @DisplayName("Given the ledger save fails, a retry with the same UUID " +
+            "is not rejected as a duplicate")
+    void addTransactionRetryAfterSaveFailureNotTreatedAsDuplicate(
+            TestInfo testInfo) {
+        // Given
+        when(transaction.getFromRoutingNum()).thenReturn(NON_LOCAL_ROUTING_NUM);
+        when(transaction.getRequestUuid()).thenReturn(testInfo.getDisplayName());
+        doThrow(new CannotCreateTransactionException(EXCEPTION_MESSAGE)).
+                doReturn(transaction).
+                when(transactionRepository).save(transaction);
+
+        // When
+        final ResponseEntity failedResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+        final ResponseEntity retryResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(failedResult);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR,
+                failedResult.getStatusCode());
+        verify(slackNotifier).notifyError(contains(EXCEPTION_MESSAGE));
+
+        assertNotNull(retryResult);
+        assertEquals(ledgerWriterController.READINESS_CODE,
+                retryResult.getBody());
+        assertEquals(HttpStatus.CREATED, retryResult.getStatusCode());
     }
 }
