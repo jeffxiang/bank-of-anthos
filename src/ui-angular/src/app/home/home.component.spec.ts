@@ -180,6 +180,55 @@ describe('HomeComponent', () => {
     expect(component.error).toContain('upstream=http://ledgerwriter:8080/transactions');
   });
 
+  it('blocks a payment with a missing recipient or non-positive amount', () => {
+    component.paymentForm.patchValue({ recipient: '', amount: '' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.paymentForm.get('recipient')!.touched).toBeTrue();
+    expect(component.paymentForm.get('amount')!.touched).toBeTrue();
+
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '0' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('blocks a new recipient whose account number is not ten digits', () => {
+    component.paymentForm.patchValue({
+      recipient: 'add', newAccount: '12345', amount: '12.34'
+    });
+    component.submitPayment();
+    expect(component.paymentForm.get('newAccount')!.valid).toBeFalse();
+    expect(api.addContact).not.toHaveBeenCalled();
+    expect(api.transaction).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a ledgerwriter SCREEN-403 decline to the user without a success message', () => {
+    api.transaction.and.returnValue(throwError(() => ({
+      error: { message: 'bad request: recipient screening declined (code SCREEN-403)' },
+      status: 400
+    })));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    expect(component.error)
+      .toContain('Payment failed: bad request: recipient screening declined (code SCREEN-403)');
+    expect(component.message).toBe('');
+    expect(component.paymentForm.value.amount).toBe('12.34');
+    expect(api.balance).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a second payment submission while one is in flight', () => {
+    const response = new Subject<string>();
+    api.transaction.and.returnValue(response);
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    component.submitPayment();
+    expect(api.transaction).toHaveBeenCalledTimes(1);
+    response.next('ok');
+    response.complete();
+    expect(component.submitting).toBeFalse();
+  });
+
   it('refreshes account data after a successful deposit', fakeAsync(() => {
     const response = new Subject<string>();
     api.transaction.and.returnValue(response);
