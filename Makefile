@@ -87,7 +87,7 @@ test-unit:
 	mvn test
 	for SERVICE in "accounts/contacts" "accounts/userservice"; \
 	do \
-		(cd src/$$SERVICE && uv run pytest -v -p no:warnings); \
+		(cd src/$$SERVICE && uv run pytest -v -p no:warnings --cov=. --cov-report=term-missing --cov-report=xml); \
 	done
 
 upgrade-py-deps:
