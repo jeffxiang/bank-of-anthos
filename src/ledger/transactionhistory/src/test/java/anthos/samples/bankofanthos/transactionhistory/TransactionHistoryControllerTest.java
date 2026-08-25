@@ -18,19 +18,25 @@ package anthos.samples.bankofanthos.transactionhistory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.initMocks;
 
 import com.auth0.jwt.JWTVerifier;
 import com.auth0.jwt.exceptions.JWTVerificationException;
+import com.auth0.jwt.exceptions.TokenExpiredException;
 import com.auth0.jwt.interfaces.Claim;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.google.common.cache.CacheStats;
 import com.google.common.cache.LoadingCache;
+import com.google.common.util.concurrent.UncheckedExecutionException;
 import io.micrometer.core.instrument.Clock;
 import io.micrometer.core.lang.Nullable;
 import io.micrometer.stackdriver.StackdriverConfig;
 import io.micrometer.stackdriver.StackdriverMeterRegistry;
+import java.time.Instant;
 import java.util.Deque;
 import java.util.concurrent.ExecutionException;
 import org.junit.jupiter.api.BeforeEach;
@@ -70,6 +76,9 @@ class TransactionHistoryControllerTest {
     private static final String BEARER_TOKEN = "Bearer abc";
     private static final String TOKEN = "abc";
     private static final String PUBLIC_KEY_PATH = "path/";
+    private static final String MALFORMED_TOKEN = "not-a-jwt";
+    private static final String NOT_AUTHORIZED = "not authorized";
+    private static final String CACHE_ERROR = "cache error";
 
     @BeforeEach
     void setUp() {
@@ -217,6 +226,75 @@ class TransactionHistoryControllerTest {
         // Then
         assertNotNull(actualResult);
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given a request with no Authorization token, return 401")
+    void getTransactions_WhenTokenIsMissing_Returns401() throws Exception {
+        // Given
+        when(verifier.verify((String) null)).thenThrow(JWTVerificationException.class);
+
+        // When
+        final ResponseEntity actualResult = transactionHistoryController
+            .getTransactions(null, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        assertEquals(NOT_AUTHORIZED, actualResult.getBody());
+        verify(cache, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("Given a malformed Authorization header without a Bearer prefix, return 401")
+    void getTransactions_WhenTokenIsMalformed_Returns401() throws Exception {
+        // Given
+        when(verifier.verify(MALFORMED_TOKEN)).thenThrow(JWTVerificationException.class);
+
+        // When
+        final ResponseEntity actualResult = transactionHistoryController
+            .getTransactions(MALFORMED_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        assertEquals(NOT_AUTHORIZED, actualResult.getBody());
+        verify(cache, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("Given an expired token, return 401")
+    void getTransactions_WhenTokenIsExpired_Returns401() throws Exception {
+        // Given
+        when(verifier.verify(TOKEN)).thenThrow(
+            new TokenExpiredException("token expired", Instant.now().minusSeconds(60)));
+
+        // When
+        final ResponseEntity actualResult = transactionHistoryController
+            .getTransactions(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        assertEquals(NOT_AUTHORIZED, actualResult.getBody());
+        verify(cache, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("Given the cache loader fails with an unchecked error, return 500")
+    void getTransactions_WhenCacheLoadFailsUnchecked_Returns500() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(cache.get(AUTHED_ACCOUNT_NUM)).thenThrow(UncheckedExecutionException.class);
+
+        // When
+        final ResponseEntity actualResult = transactionHistoryController
+            .getTransactions(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+        assertEquals(CACHE_ERROR, actualResult.getBody());
     }
 
 }
