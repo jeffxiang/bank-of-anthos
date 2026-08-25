@@ -15,22 +15,27 @@
 """Tests for frontend payment authentication and error handling."""
 
 import unittest
-import sys
-from pathlib import Path
+from sys import modules
 from urllib.parse import parse_qs, urlparse
 from unittest.mock import MagicMock, mock_open, patch
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from frontend import api_call, traced_thread_pool_executor
+from markupsafe import _native
 import jwt
 import markupsafe
 import requests
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 
-from markupsafe import _native
-
-markupsafe._escape_inner = _native._escape_inner
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+modules["api_call"] = api_call
+modules["traced_thread_pool_executor"] = traced_thread_pool_executor
 import frontend.frontend as frontend
+
+try:
+    markupsafe._escape_inner("x")
+except SystemError:
+    # The MarkupSafe C speedup is broken on this CPython build.
+    markupsafe._escape_inner = markupsafe._native._escape_inner
 
 
 def generate_rsa_key_pair():
@@ -139,5 +144,27 @@ class TestFrontend(unittest.TestCase):
         self.assertIn("/home", location)
         self.assertEqual(location_message, "Payment failed: transaction recipient is screened")
         self.assertIn(SLACK_WEBHOOK_URL, [call.kwargs["url"] for call in mocked_post.call_args_list])
+        self.assertNotIn(token, location)
+        self.assertNotIn(token, response.get_data(as_text=True))
+
+    def test_payment_redirects_home_when_amount_not_a_number(self):
+        """Redirects with a generic validation error and alerts Slack for invalid amounts."""
+        token = self._set_token_cookie()
+        form_data = {**TRANSACTION_FORM, "amount": "abc"}
+
+        with patch(
+            "frontend.frontend.requests.post",
+            return_value=MagicMock(status_code=200),
+        ) as mocked_post:
+            response = self.test_app.post("/payment", data=form_data)
+
+        location = response.headers["Location"]
+        location_message = parse_qs(urlparse(location).query)["msg"][0]
+        post_urls = [call.kwargs["url"] for call in mocked_post.call_args_list]
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/home", location)
+        self.assertEqual(location_message, "Payment failed")
+        self.assertIn(SLACK_WEBHOOK_URL, post_urls)
+        self.assertNotIn(self.flask_app.config["TRANSACTIONS_URI"], post_urls)
         self.assertNotIn(token, location)
         self.assertNotIn(token, response.get_data(as_text=True))
