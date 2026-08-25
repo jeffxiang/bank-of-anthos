@@ -18,6 +18,8 @@ package anthos.samples.bankofanthos.ledgerwriter;
 
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION;
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_INSUFFICIENT_BALANCE;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_NOT_AUTHENTICATED;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_RECIPIENT_SCREENED;
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -25,6 +27,7 @@ import static org.mockito.Mockito.contains;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -414,5 +417,100 @@ class LedgerWriterControllerTest {
                 EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION,
                 duplicateResult.getBody());
         assertEquals(HttpStatus.BAD_REQUEST, duplicateResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given the recipient is screened, reject with HTTP Status 400, "
+            + "write nothing to the ledger and alert Slack")
+    void addTransactionWhenRecipientScreened(TestInfo testInfo) {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getRequestUuid()).thenReturn(testInfo.getDisplayName());
+        doThrow(new IllegalArgumentException(
+                EXCEPTION_MESSAGE_RECIPIENT_SCREENED)).when(
+                        transactionValidator).validateTransaction(
+                                LOCAL_ROUTING_NUM, AUTHED_ACCOUNT_NUM,
+                                transaction);
+
+        // When
+        final ResponseEntity actualResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(EXCEPTION_MESSAGE_RECIPIENT_SCREENED,
+                actualResult.getBody());
+        assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
+        verifyNoInteractions(transactionRepository);
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_RECIPIENT_SCREENED));
+    }
+
+    @Test
+    @DisplayName("Given the sender does not match the authenticated account, "
+            + "reject with HTTP Status 400 and write nothing to the ledger")
+    void addTransactionWhenSenderNotAuthenticated(TestInfo testInfo) {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getRequestUuid()).thenReturn(testInfo.getDisplayName());
+        doThrow(new IllegalArgumentException(
+                EXCEPTION_MESSAGE_NOT_AUTHENTICATED)).when(
+                        transactionValidator).validateTransaction(
+                                LOCAL_ROUTING_NUM, AUTHED_ACCOUNT_NUM,
+                                transaction);
+
+        // When
+        final ResponseEntity actualResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(EXCEPTION_MESSAGE_NOT_AUTHENTICATED,
+                actualResult.getBody());
+        assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
+        verifyNoInteractions(transactionRepository);
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_NOT_AUTHENTICATED));
+    }
+
+    @Test
+    @DisplayName("Given an unverifiable bearer token, neither validate nor "
+            + "persist the transaction")
+    void addTransactionWhenUnauthorizedSkipsLedgerWrite() {
+        // Given
+        when(verifier.verify(TOKEN)).thenThrow(JWTVerificationException.class);
+
+        // When
+        ledgerWriterController.addTransaction(BEARER_TOKEN, transaction);
+
+        // Then
+        verifyNoInteractions(transactionValidator);
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    @DisplayName("Given a duplicate transaction, persist it only once and "
+            + "alert Slack about the rejected duplicate")
+    void addTransactionWhenDuplicateUuidPersistsOnce(TestInfo testInfo) {
+        // Given
+        when(transaction.getFromRoutingNum()).thenReturn(NON_LOCAL_ROUTING_NUM);
+        when(transaction.getRequestUuid()).thenReturn(testInfo.getDisplayName());
+
+        // When
+        ledgerWriterController.addTransaction(BEARER_TOKEN, transaction);
+        final ResponseEntity duplicateResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(duplicateResult);
+        assertEquals(EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION,
+                duplicateResult.getBody());
+        assertEquals(HttpStatus.BAD_REQUEST, duplicateResult.getStatusCode());
+        verify(transactionRepository, times(1)).save(transaction);
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION));
     }
 }
