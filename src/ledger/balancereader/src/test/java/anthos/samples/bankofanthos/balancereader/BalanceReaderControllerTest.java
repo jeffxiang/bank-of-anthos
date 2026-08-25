@@ -16,13 +16,20 @@
 
 package anthos.samples.bankofanthos.balancereader;
 
+import com.auth0.jwt.JWT;
+import com.auth0.jwt.algorithms.Algorithm;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.CacheStats;
+import com.google.common.util.concurrent.UncheckedExecutionException;
 import io.micrometer.core.instrument.Clock;
 import io.micrometer.core.instrument.binder.cache.GuavaCacheMetrics;
 import io.micrometer.core.lang.Nullable;
 import io.micrometer.stackdriver.StackdriverConfig;
 import io.micrometer.stackdriver.StackdriverMeterRegistry;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
 import java.util.concurrent.ExecutionException;
 
 import com.auth0.jwt.JWTVerifier;
@@ -219,6 +226,36 @@ class BalanceReaderControllerTest {
     }
 
     @Test
+    @DisplayName("Given a token signed by an untrusted key, return 401")
+    void getBalanceFailsWhenTokenSignatureIsInvalid() throws Exception {
+        // Given
+        KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("RSA");
+        keyPairGenerator.initialize(2048);
+        KeyPair signingKeyPair = keyPairGenerator.generateKeyPair();
+        KeyPair verificationKeyPair = keyPairGenerator.generateKeyPair();
+        Algorithm signingAlgorithm = Algorithm.RSA256(
+            (RSAPublicKey) signingKeyPair.getPublic(),
+            (RSAPrivateKey) signingKeyPair.getPrivate());
+        Algorithm verificationAlgorithm = Algorithm.RSA256(
+            (RSAPublicKey) verificationKeyPair.getPublic(), null);
+        String invalidToken = JWT.create()
+            .withClaim(JWT_ACCOUNT_KEY, AUTHED_ACCOUNT_NUM)
+            .sign(signingAlgorithm);
+        JWTVerifier realVerifier = JWT.require(verificationAlgorithm).build();
+        when(verifier.verify(invalidToken))
+            .thenAnswer(invocation -> realVerifier.verify(invalidToken));
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(
+            "Bearer " + invalidToken, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        assertEquals("not authorized", actualResult.getBody());
+    }
+
+    @Test
     @DisplayName("Given the cache throws an error for an authenticated user, return 500")
     void getBalanceFailsWhenCacheThrowsError() throws Exception {
         // Given
@@ -233,6 +270,24 @@ class BalanceReaderControllerTest {
         // Then
         assertNotNull(actualResult);
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given the cache throws an unchecked error for an authenticated user, return 500")
+    void getBalanceFailsWhenCacheThrowsUncheckedError() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(cache.get(AUTHED_ACCOUNT_NUM)).thenThrow(
+            new UncheckedExecutionException(new RuntimeException("cache failure")));
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(
+            BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+        assertEquals("cache error", actualResult.getBody());
     }
 
 }
