@@ -81,7 +81,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: SCREENED_ACCOUNTS
-              value: "1055757655"
+              value: ""
             - name: SLACK_WEBHOOK_URL
               valueFrom:
                 secretKeyRef:
