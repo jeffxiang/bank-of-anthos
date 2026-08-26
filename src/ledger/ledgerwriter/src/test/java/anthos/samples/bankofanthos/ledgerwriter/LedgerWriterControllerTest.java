@@ -18,12 +18,17 @@ package anthos.samples.bankofanthos.ledgerwriter;
 
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION;
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_INSUFFICIENT_BALANCE;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_INVALID_NUMBER;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_NOT_AUTHENTICATED;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_RECIPIENT_SCREENED;
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.contains;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -242,6 +247,115 @@ class LedgerWriterControllerTest {
         assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
         verify(slackNotifier).notifyError(
                 contains(EXCEPTION_MESSAGE_INSUFFICIENT_BALANCE));
+    }
+
+    @Test
+    @DisplayName("Given the recipient is a screened account, return HTTP Status 400 " +
+            "and write no ledger entry")
+    void addTransactionWhenRecipientScreened() {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        doThrow(new IllegalArgumentException(
+                EXCEPTION_MESSAGE_RECIPIENT_SCREENED)).when(
+                        transactionValidator).validateTransaction(
+                                LOCAL_ROUTING_NUM, AUTHED_ACCOUNT_NUM,
+                                transaction);
+
+        // When
+        final ResponseEntity actualResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(EXCEPTION_MESSAGE_RECIPIENT_SCREENED,
+                actualResult.getBody());
+        assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
+        verify(transactionRepository, never()).save(any(Transaction.class));
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_RECIPIENT_SCREENED));
+    }
+
+    @Test
+    @DisplayName("Given the sender does not match the authenticated account, " +
+            "return HTTP Status 400 and write no ledger entry")
+    void addTransactionWhenSenderNotAuthenticated() {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        doThrow(new IllegalArgumentException(
+                EXCEPTION_MESSAGE_NOT_AUTHENTICATED)).when(
+                        transactionValidator).validateTransaction(
+                                LOCAL_ROUTING_NUM, AUTHED_ACCOUNT_NUM,
+                                transaction);
+
+        // When
+        final ResponseEntity actualResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(EXCEPTION_MESSAGE_NOT_AUTHENTICATED,
+                actualResult.getBody());
+        assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
+        verify(transactionRepository, never()).save(any(Transaction.class));
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_NOT_AUTHENTICATED));
+    }
+
+    @Test
+    @DisplayName("Given the transaction has an invalid routing number, " +
+            "return HTTP Status 400 and write no ledger entry")
+    void addTransactionWhenRoutingNumberInvalid() {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        doThrow(new IllegalArgumentException(
+                EXCEPTION_MESSAGE_INVALID_NUMBER)).when(
+                        transactionValidator).validateTransaction(
+                                LOCAL_ROUTING_NUM, AUTHED_ACCOUNT_NUM,
+                                transaction);
+
+        // When
+        final ResponseEntity actualResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(EXCEPTION_MESSAGE_INVALID_NUMBER,
+                actualResult.getBody());
+        assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
+        verify(transactionRepository, never()).save(any(Transaction.class));
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_INVALID_NUMBER));
+    }
+
+    @Test
+    @DisplayName("Given the transaction is internal and the transaction amount > sender balance, " +
+            "write no ledger entry")
+    void addTransactionWritesNoLedgerEntryWhenAmountLargerThanBalance(TestInfo testInfo) {
+        // Given
+        LedgerWriterController spyLedgerWriterController =
+                spy(ledgerWriterController);
+        when(transaction.getFromRoutingNum()).thenReturn(LOCAL_ROUTING_NUM);
+        when(transaction.getFromAccountNum()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getAmount()).thenReturn(LARGER_THAN_SENDER_BALANCE);
+        when(transaction.getRequestUuid()).thenReturn(testInfo.getDisplayName());
+        doReturn(SENDER_BALANCE).when(
+                spyLedgerWriterController).getAvailableBalance(
+                TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // When
+        final ResponseEntity actualResult =
+                spyLedgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(EXCEPTION_MESSAGE_INSUFFICIENT_BALANCE,
+                actualResult.getBody());
+        assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
+        verifyNoInteractions(transactionRepository);
     }
 
     @Test
