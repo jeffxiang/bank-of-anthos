@@ -31,6 +31,7 @@ import com.auth0.jwt.interfaces.Claim;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.LoadingCache;
+import com.google.common.util.concurrent.UncheckedExecutionException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -219,6 +220,52 @@ class BalanceReaderControllerTest {
     }
 
     @Test
+    @DisplayName("Given the authorization token is missing, return 401")
+    void getBalanceFailsWhenAuthorizationTokenIsMissing() {
+        // Given
+        when(verifier.verify((String) null)).thenThrow(JWTVerificationException.class);
+
+        // When
+        final ResponseEntity actualResult =
+            balanceReaderController.getBalance(null, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given the authorization token is malformed, return 401")
+    void getBalanceFailsWhenAuthorizationTokenIsMalformed() {
+        // Given
+        final String malformedToken = "not-a-jwt";
+        when(verifier.verify(malformedToken)).thenThrow(JWTVerificationException.class);
+
+        // When
+        final ResponseEntity actualResult =
+            balanceReaderController.getBalance(malformedToken, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given the authorization token is expired, return 401")
+    void getBalanceFailsWhenAuthorizationTokenIsExpired() {
+        // Given
+        when(verifier.verify(TOKEN)).thenThrow(JWTVerificationException.class);
+
+        // When
+        final ResponseEntity actualResult =
+            balanceReaderController.getBalance(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+    }
+
+    @Test
     @DisplayName("Given the cache throws an error for an authenticated user, return 500")
     void getBalanceFailsWhenCacheThrowsError() throws Exception {
         // Given
@@ -229,6 +276,23 @@ class BalanceReaderControllerTest {
 
         // When
         final ResponseEntity actualResult = balanceReaderController.getBalance(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given the cache loader fails for an authenticated user, return 500")
+    void getBalanceFailsWhenCacheLoaderThrowsUncheckedError() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(cache.get(AUTHED_ACCOUNT_NUM)).thenThrow(
+            new UncheckedExecutionException(new RuntimeException()));
+
+        // When
+        final ResponseEntity actualResult =
+            balanceReaderController.getBalance(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
 
         // Then
         assertNotNull(actualResult);
