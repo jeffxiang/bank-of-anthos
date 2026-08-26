@@ -180,6 +180,45 @@ describe('HomeComponent', () => {
     expect(component.error).toContain('upstream=http://ledgerwriter:8080/transactions');
   });
 
+  it('rejects zero, sub-cent, negative and missing payment amounts', () => {
+    for (const amount of ['0', '0.004', '-12.34', '']) {
+      component.paymentForm.patchValue({ recipient: '1033623433', amount });
+      component.submitPayment();
+      expect(api.transaction).not.toHaveBeenCalled();
+      expect(component.paymentForm.touched).toBeTrue();
+      expect(component.submitting).toBeFalse();
+      expect(component.error).toBe('');
+    }
+  });
+
+  it('reports a missing recipient without calling the ledger', () => {
+    component.paymentForm.patchValue({ recipient: '9999999999', amount: '12.34' });
+    component.submitPayment();
+    expect(component.error).toBe('Please select a recipient');
+
+    component.paymentForm.patchValue({ recipient: 'add', newAccount: '', amount: '12.34' });
+    component.submitPayment();
+    expect(component.error).toBe('Please select a recipient');
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(api.addContact).not.toHaveBeenCalled();
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('falls back to Unknown error when the failure carries no message or status', () => {
+    api.transaction.and.returnValue(throwError(() => ({})));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    expect(component.error).toBe('Payment failed: Unknown error');
+    expect(component.message).toBe('');
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('shows a load error when account data cannot be fetched', () => {
+    api.balance.and.returnValue(throwError(() => ({ status: 500 })));
+    component.ngOnInit();
+    expect(component.error).toBe('Unable to load account data');
+  });
+
   it('refreshes account data after a successful deposit', fakeAsync(() => {
     const response = new Subject<string>();
     api.transaction.and.returnValue(response);
