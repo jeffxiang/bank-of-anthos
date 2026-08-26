@@ -180,6 +180,58 @@ describe('HomeComponent', () => {
     expect(component.error).toContain('upstream=http://ledgerwriter:8080/transactions');
   });
 
+  it('rejects zero, negative and empty payment amounts without calling the ledger', () => {
+    for (const amount of ['0', '-12.34', '0.001', '']) {
+      api.transaction.calls.reset();
+      component.paymentForm.patchValue({ recipient: '1033623433', amount });
+      component.submitPayment();
+      expect(api.transaction).not.toHaveBeenCalled();
+      expect(component.paymentForm.touched).toBeTrue();
+      expect(component.message).toBe('');
+      expect(component.error).toBe('');
+    }
+  });
+
+  it('rejects a payment without a resolvable recipient', () => {
+    component.paymentForm.patchValue({ recipient: 'add', newAccount: '', amount: '12.34' });
+    component.submitPayment();
+    expect(api.addContact).not.toHaveBeenCalled();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.error).toBe('Please select a recipient');
+
+    component.paymentForm.patchValue({ recipient: '9999999999', amount: '12.34' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.error).toBe('Please select a recipient');
+  });
+
+  it('reports an unknown error when the payment failure carries no message or status', () => {
+    api.transaction.and.returnValue(throwError(() => ({})));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    expect(component.error).toBe('Payment failed: Unknown error');
+    expect(component.message).toBe('');
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('shows screening diagnostics for a plain-text decline but not for other failures', () => {
+    api.transaction.and.returnValue(throwError(() => ({
+      error: 'recipient screening declined (code SCREEN-403)',
+      status: 400
+    })));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    expect(component.error).toContain('SCREEN-403');
+    expect(component.error).toContain('acct=1011226111');
+
+    api.transaction.and.returnValue(throwError(() => ({
+      error: 'recipient screening declined',
+      status: 400
+    })));
+    component.submitPayment();
+    expect(component.error).toBe('Payment failed: recipient screening declined');
+  });
+
   it('refreshes account data after a successful deposit', fakeAsync(() => {
     const response = new Subject<string>();
     api.transaction.and.returnValue(response);
