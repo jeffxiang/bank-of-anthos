@@ -83,11 +83,15 @@ test-e2e:
 	E2E_URL="http://$(shell kubectl get service frontend -o jsonpath='{.status.loadBalancer.ingress[0].ip}')" && \
 	docker run -it -v ${E2E_PATH}:/e2e -w /e2e -e CYPRESS_baseUrl=$${E2E_URL} cypress/included:5.0.0 $(E2E_FLAGS)
 
+# Unit tests with report-only coverage: JaCoCo writes
+# <module>/target/site/jacoco/{jacoco.xml,jacoco.csv}, pytest-cov writes
+# <service>/coverage.xml. No thresholds are enforced.
 test-unit:
 	mvn test
 	for SERVICE in "accounts/contacts" "accounts/userservice"; \
 	do \
-		(cd src/$$SERVICE && uv run pytest -v -p no:warnings); \
+		(cd src/$$SERVICE && uv run pytest -v -p no:warnings \
+			--cov=. --cov-branch --cov-report=term --cov-report=xml) || exit 1; \
 	done
 
 upgrade-py-deps:
