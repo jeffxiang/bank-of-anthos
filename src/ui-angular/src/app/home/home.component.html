@@ -1,28 +1,56 @@
-<main class="page container">
-  <section class="account-hero">
-    <div class="account-hero-identity">
-      <p class="account-hero-eyebrow">Advantage Banking</p>
-      <h1 class="account-hero-title">Account Summary</h1>
-      <p class="account-hero-meta">Account Number: {{ accountId }}</p>
+<section class="account-band">
+  <div class="container">
+    <div class="account-band-head">
+      <h1 class="account-band-title">Adv Plus Banking - {{ accountId }}</h1>
+      <span class="account-band-link">Account &amp; routing numbers</span>
     </div>
-    <div class="account-hero-balance">
-      <p class="account-hero-balance-label">Current Balance</p>
-      <div class="balance">{{ balance | currencyCents }}</div>
-      <p class="account-hero-balance-note">Available for transfers and payments</p>
+    <div class="account-band-grid">
+      <div class="account-band-balance">
+        <div class="balance">{{ balance | currencyCents }}</div>
+        <span class="account-band-balance-label">Available balance (as of today)</span>
+      </div>
+      <div class="account-band-col">
+        <h2 class="account-band-col-title">Features</h2>
+        <ul class="detail-list">
+          <li><span>Keep the Change savings transfers</span><span class="detail-list-value">Enroll</span></li>
+          <li><span>Balance Connect for overdraft protection</span><span class="detail-list-value">Off</span></li>
+          <li><span>Beneficiaries</span><span class="detail-list-value">Manage</span></li>
+          <li><span>Paperless statements</span><span class="detail-list-value">On</span></li>
+        </ul>
+      </div>
+      <div class="account-band-col">
+        <h2 class="account-band-col-title">Services</h2>
+        <ul class="detail-list detail-list-links">
+          <li>Manage card settings</li>
+          <li>Order account supplies</li>
+          <li>Tips to avoid overdraft fees</li>
+          <li>Dispute a transaction</li>
+        </ul>
+      </div>
     </div>
-  </section>
+  </div>
+</section>
 
+<nav class="account-tabs" aria-label="Account sections">
+  <div class="container account-tabs-content">
+    <span class="account-tab account-tab-active" aria-current="page">Activity</span>
+    <span class="account-tab">Statements &amp; Documents</span>
+    <span class="account-tab">Information &amp; Services</span>
+  </div>
+</nav>
+
+<main class="page container">
   <div class="account-layout">
     <mat-card class="history-card">
       <mat-card-content>
         <div class="section-heading">
-          <h2 mat-card-title>Transaction History</h2>
-          <span class="section-heading-note">Most recent activity</span>
+          <h2 mat-card-title>Transactions</h2>
+          <span class="section-heading-note">Currently viewing: transaction history</span>
         </div>
         <div class="table-wrap">
           <table mat-table [dataSource]="transactions">
             <ng-container matColumnDef="date">
-              <th mat-header-cell *matHeaderCellDef>Date</th>
+              <th mat-header-cell *matHeaderCellDef>Posting date</th>
               <td mat-cell *matCellDef="let transaction">{{ transaction.timestamp | date:'MMM d' }}</td>
             </ng-container>
             <ng-container matColumnDef="type">
@@ -40,7 +68,7 @@
               <td mat-cell *matCellDef="let transaction">{{ transactionAccount(transaction) }}</td>
             </ng-container>
             <ng-container matColumnDef="label">
-              <th mat-header-cell *matHeaderCellDef>Label</th>
+              <th mat-header-cell *matHeaderCellDef>Description</th>
               <td mat-cell *matCellDef="let transaction">{{ transactionLabel(transaction) }}</td>
             </ng-container>
             <ng-container matColumnDef="amount">
