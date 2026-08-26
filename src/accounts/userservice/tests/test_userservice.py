@@ -288,6 +288,62 @@ class TestUserservice(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, b'failed to create user')
 
+    def test_create_user_username_length_boundaries(self):
+        """test the 2-15 character username bounds are inclusive"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        for username, expected_status in (('ab', 201), ('a' * 15, 201),
+                                          ('a', 400), ('a' * 16, 400)):
+            example_user_request = EXAMPLE_USER_REQUEST.copy()
+            example_user_request['username'] = username
+            response = self.test_app.post('/users', data=example_user_request)
+            self.assertEqual(response.status_code, expected_status,
+                             'username of length {} returned {}'.format(
+                                 len(username), response.status_code))
+
+    def test_create_user_whitespace_only_pii_accepted(self):
+        """whitespace-only PII fields are accepted and stored verbatim
+
+        Documents a validation gap: the required-value check only rejects
+        falsy values, so a field of spaces or tabs passes validation and is
+        persisted as-is.
+        """
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        example_user_request = EXAMPLE_USER_REQUEST.copy()
+        for field in ('firstname', 'lastname', 'address', 'state', 'zip', 'ssn'):
+            example_user_request[field] = '   '
+        response = self.test_app.post('/users', data=example_user_request)
+        self.assertEqual(response.status_code, 201)
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        self.assertEqual(user_object['firstname'], '   ')
+        self.assertEqual(user_object['ssn'], '   ')
+
+    def test_create_user_pii_html_escaped_and_unicode_preserved(self):
+        """test PII fields are HTML-escaped while unicode is left intact"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        example_user_request = EXAMPLE_USER_REQUEST.copy()
+        example_user_request['firstname'] = "<script>alert('xss')</script>"
+        example_user_request['lastname'] = 'Zoë-仮'
+        example_user_request['address'] = '1 Main St & 🏦 Plaza'
+        response = self.test_app.post('/users', data=example_user_request)
+        self.assertEqual(response.status_code, 201)
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        self.assertNotIn('<script>', user_object['firstname'])
+        self.assertEqual(user_object['firstname'],
+                         "&lt;script&gt;alert('xss')&lt;/script&gt;")
+        self.assertEqual(user_object['lastname'], 'Zoë-仮')
+        self.assertEqual(user_object['address'], '1 Main St &amp; 🏦 Plaza')
+
+    def test_login_db_error_500_status_code_error_message(self):
+        """test a DB failure while looking up the user returns 500"""
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data, b'failed to retrieve user information')
+
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """
         # mock return value of get_user which checks if user exists as None
