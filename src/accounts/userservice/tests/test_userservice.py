@@ -288,6 +288,77 @@ class TestUserservice(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, b'failed to create user')
 
+    def test_login_sql_error_500_status_code_error_message(self):
+        """test logging in when the user lookup raises a database error"""
+        # mock get_user to throw SQLAlchemyError
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        # send request to test client
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert 500 response code
+        self.assertEqual(response.status_code, 500)
+        # assert we get correct error message
+        self.assertEqual(response.data, b'failed to retrieve user information')
+
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_200_status_code_signed_token_claims(self, _mock_checkpw):
+        """test the returned JWT is RS256 signed and carries the expected claims"""
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        # set private key and a known expiry window
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        self.flask_app.config['EXPIRY_SECONDS'] = 300
+        # send request to test client
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert 200 response
+        self.assertEqual(response.status_code, 200)
+        token = response.json['token']
+        # assert the token is signed with RS256
+        self.assertEqual(jwt.get_unverified_header(token)['alg'], 'RS256')
+        # decode payload using public key, which fails if the signature is wrong
+        decoded_value = jwt.decode(algorithms='RS256', jwt=token, key=EXAMPLE_PUBLIC_KEY)
+        # assert the account claim comes from the database record
+        self.assertEqual(decoded_value['acct'], EXAMPLE_USER['accountid'])
+        # assert expiry honours the configured window
+        self.assertEqual(decoded_value['exp'] - decoded_value['iat'], 300)
+
+    def test_create_user_201_status_code_escaped_and_unicode_pii(self):
+        """test PII fields are HTML escaped and unicode values are preserved"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        example_user_request = EXAMPLE_USER_REQUEST.copy()
+        example_user_request['firstname'] = '<script>alert(1)</script>'
+        example_user_request['lastname'] = 'Zoë 仮名'
+        # send request to test client
+        response = self.test_app.post('/users', data=example_user_request)
+        # assert 201 response code
+        self.assertEqual(response.status_code, 201)
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        # assert the markup was escaped rather than stored verbatim
+        self.assertNotIn('<script>', user_object['firstname'])
+        self.assertIn('&lt;script&gt;', user_object['firstname'])
+        # assert non-ascii names survive sanitization unchanged
+        self.assertEqual(user_object['lastname'], 'Zoë 仮名')
+
+    def test_create_user_201_status_code_whitespace_only_pii_accepted(self):
+        """test whitespace-only PII fields are accepted today (known validation gap)
+
+        __validate_new_user checks `not bool(req[f] or req[f].strip())`, which is
+        true only for falsy values, so a whitespace-only field passes validation
+        and is stored as-is. Documented here rather than fixed in production code.
+        """
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        example_user_request = EXAMPLE_USER_REQUEST.copy()
+        example_user_request['firstname'] = '   '
+        example_user_request['ssn'] = '\t'
+        # send request to test client
+        response = self.test_app.post('/users', data=example_user_request)
+        # assert current behavior: the request is accepted
+        self.assertEqual(response.status_code, 201)
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        # assert the whitespace-only values reach the database untouched
+        self.assertEqual(user_object['firstname'], '   ')
+        self.assertEqual(user_object['ssn'], '\t')
+
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """
         # mock return value of get_user which checks if user exists as None
