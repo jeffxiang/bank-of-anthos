@@ -1,144 +1,198 @@
-<main class="page container">
-  <div class="alert alert-success" *ngIf="message">{{ message }}</div>
-  <div class="alert alert-danger" *ngIf="error">{{ error }}</div>
-  <div class="alert alert-info" *ngIf="submitting">Processing transaction...</div>
-  <mat-card>
-    <mat-card-content>
-      <p class="muted">Account Number: {{ accountId }}</p>
-      <p class="muted">Current Balance</p>
-      <div class="balance">{{ balance | currencyCents }}</div>
-    </mat-card-content>
-  </mat-card>
-  <section class="form-grid transaction-forms">
-    <mat-card>
-      <mat-card-content>
-        <form class="card-form" [formGroup]="depositForm" (ngSubmit)="submitDeposit()" novalidate>
-          <h2 mat-card-title>Make a Deposit</h2>
-          <mat-form-field appearance="outline">
-            <mat-label>External Account</mat-label>
-            <mat-select id="deposit-account" formControlName="account">
-              <mat-option *ngFor="let account of depositAccounts" [value]="externalValue(account)">
-                {{ account.label }} - {{ account.account_num }} - {{ account.routing_num }}
-              </mat-option>
-              <mat-option value="add">New external account</mat-option>
-            </mat-select>
-            <mat-error *ngIf="depositForm.controls.account.touched && depositForm.controls.account.invalid">
-              Please select an external account.
-            </mat-error>
-          </mat-form-field>
-          <div *ngIf="depositForm.value.account === 'add'">
-            <mat-form-field appearance="outline">
-              <mat-label>Account Number</mat-label>
-              <input matInput formControlName="newAccount" inputmode="numeric">
-              <mat-error *ngIf="depositForm.controls.newAccount.touched && depositForm.controls.newAccount.invalid">
-                Enter a 10-digit account number.
-              </mat-error>
-            </mat-form-field>
-            <mat-form-field appearance="outline">
-              <mat-label>Routing Number</mat-label>
-              <input matInput formControlName="newRouting" inputmode="numeric">
-              <mat-error *ngIf="depositForm.controls.newRouting.touched && depositForm.controls.newRouting.invalid">
-                Enter a 9-digit routing number.
-              </mat-error>
-            </mat-form-field>
-            <mat-form-field appearance="outline">
-              <mat-label>Account Label (Optional)</mat-label>
-              <input matInput formControlName="newLabel">
-            </mat-form-field>
-          </div>
-          <mat-form-field appearance="outline">
-            <mat-label>Deposit Amount</mat-label>
-            <input matInput type="number" step="0.01" min="0.01" max="500000" formControlName="amount">
-            <mat-error *ngIf="depositForm.controls.amount.touched && depositForm.controls.amount.invalid">
-              Enter an amount between $0.01 and $500,000.
-            </mat-error>
-          </mat-form-field>
-          <button mat-raised-button color="primary" type="submit" [disabled]="submitting">
-            <mat-spinner *ngIf="submitting" class="button-spinner" diameter="20" aria-label="Processing transaction"></mat-spinner>
-            <span>Deposit</span>
-          </button>
-        </form>
-      </mat-card-content>
-    </mat-card>
-    <mat-card>
-      <mat-card-content>
-        <form class="card-form" [formGroup]="paymentForm" (ngSubmit)="submitPayment()" novalidate>
-          <h2 mat-card-title>Send a Payment</h2>
-          <mat-form-field appearance="outline">
-            <mat-label>Recipient</mat-label>
-            <mat-select id="payment-recipient" formControlName="recipient">
-              <mat-option *ngFor="let account of paymentRecipients" [value]="account.account_num">
-                {{ account.label }} - {{ account.account_num }}
-              </mat-option>
-              <mat-option value="add">New recipient</mat-option>
-            </mat-select>
-            <mat-error *ngIf="paymentForm.controls.recipient.touched && paymentForm.controls.recipient.invalid">
-              Please select a recipient.
-            </mat-error>
-          </mat-form-field>
-          <div *ngIf="paymentForm.value.recipient === 'add'">
-            <mat-form-field appearance="outline">
-              <mat-label>Account Number</mat-label>
-              <input matInput formControlName="newAccount" inputmode="numeric">
-              <mat-error *ngIf="paymentForm.controls.newAccount.touched && paymentForm.controls.newAccount.invalid">
-                Enter a 10-digit account number.
-              </mat-error>
-            </mat-form-field>
-            <mat-form-field appearance="outline">
-              <mat-label>Contact Label (Optional)</mat-label>
-              <input matInput formControlName="newLabel">
-            </mat-form-field>
-          </div>
-          <mat-form-field appearance="outline">
-            <mat-label>Transaction Amount</mat-label>
-            <input matInput type="number" step="0.01" min="0.01" [max]="(balance || 0) / 100" formControlName="amount">
-            <mat-error *ngIf="paymentForm.controls.amount.touched && paymentForm.controls.amount.invalid">
-              Enter a positive transaction amount.
-            </mat-error>
-          </mat-form-field>
-          <button mat-raised-button color="primary" type="submit" [disabled]="submitting">
-            <mat-spinner *ngIf="submitting" class="button-spinner" diameter="20" aria-label="Processing transaction"></mat-spinner>
-            <span>Send Payment</span>
-          </button>
-        </form>
-      </mat-card-content>
-    </mat-card>
-  </section>
-  <mat-card class="history-card">
-    <mat-card-content>
-    <h2 mat-card-title>Transaction History</h2>
-    <div class="table-wrap">
-      <table mat-table [dataSource]="transactions">
-        <ng-container matColumnDef="date">
-          <th mat-header-cell *matHeaderCellDef>Date</th>
-          <td mat-cell *matCellDef="let transaction">{{ transaction.timestamp | date:'MMM d' }}</td>
-        </ng-container>
-        <ng-container matColumnDef="type">
-          <th mat-header-cell *matHeaderCellDef>Type</th>
-          <td mat-cell *matCellDef="let transaction"
-            [class.credit]="isIncoming(transaction)" [class.debit]="!isIncoming(transaction)">
-            {{ isIncoming(transaction) ? 'Credit' : 'Debit' }}
-          </td>
-        </ng-container>
-        <ng-container matColumnDef="account">
-          <th mat-header-cell *matHeaderCellDef>Account</th>
-          <td mat-cell *matCellDef="let transaction">{{ transactionAccount(transaction) }}</td>
-        </ng-container>
-        <ng-container matColumnDef="label">
-          <th mat-header-cell *matHeaderCellDef>Label</th>
-          <td mat-cell *matCellDef="let transaction">{{ transactionLabel(transaction) }}</td>
-        </ng-container>
-        <ng-container matColumnDef="amount">
-          <th mat-header-cell *matHeaderCellDef>Amount</th>
-          <td mat-cell *matCellDef="let transaction"
-            [class.credit]="isIncoming(transaction)" [class.debit]="!isIncoming(transaction)">
-            {{ isIncoming(transaction) ? '+' : '-' }}{{ transaction.amount | currencyCents }}
-          </td>
-        </ng-container>
-        <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
-        <tr mat-row *matRowDef="let transaction; columns: displayedColumns;"></tr>
-      </table>
+<section class="account-band">
+  <div class="container">
+    <div class="account-band-head">
+      <h1 class="account-band-title">Adv Plus Banking - {{ accountId }}</h1>
+      <span class="account-band-link">Account &amp; routing numbers</span>
     </div>
-    </mat-card-content>
-  </mat-card>
+    <div class="account-band-grid">
+      <div class="account-band-balance">
+        <div class="balance">{{ balance | currencyCents }}</div>
+        <span class="account-band-balance-label">Available balance (as of today)</span>
+      </div>
+      <div class="account-band-col">
+        <h2 class="account-band-col-title">Features</h2>
+        <ul class="detail-list">
+          <li><span>Keep the Change savings transfers</span><span class="detail-list-value">Enroll</span></li>
+          <li><span>Balance Connect for overdraft protection</span><span class="detail-list-value">Off</span></li>
+          <li><span>Beneficiaries</span><span class="detail-list-value">Manage</span></li>
+          <li><span>Paperless statements</span><span class="detail-list-value">On</span></li>
+        </ul>
+      </div>
+      <div class="account-band-col">
+        <h2 class="account-band-col-title">Services</h2>
+        <ul class="detail-list detail-list-links">
+          <li>Manage card settings</li>
+          <li>Order account supplies</li>
+          <li>Tips to avoid overdraft fees</li>
+          <li>Dispute a transaction</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<nav class="account-tabs" aria-label="Account sections">
+  <div class="container account-tabs-content">
+    <span class="account-tab account-tab-active" aria-current="page">Activity</span>
+    <span class="account-tab">Statements &amp; Documents</span>
+    <span class="account-tab">Information &amp; Services</span>
+  </div>
+</nav>
+
+<main class="page container">
+  <div class="account-layout">
+    <mat-card class="history-card">
+      <mat-card-content>
+        <div class="section-heading">
+          <h2 mat-card-title>Transactions</h2>
+          <span class="section-heading-note">Currently viewing: transaction history</span>
+        </div>
+        <div class="table-wrap">
+          <table mat-table [dataSource]="transactions">
+            <ng-container matColumnDef="date">
+              <th mat-header-cell *matHeaderCellDef>Posting date</th>
+              <td mat-cell *matCellDef="let transaction">{{ transaction.timestamp | date:'MMM d' }}</td>
+            </ng-container>
+            <ng-container matColumnDef="type">
+              <th mat-header-cell *matHeaderCellDef>Type</th>
+              <td mat-cell *matCellDef="let transaction">
+                <span class="type-pill"
+                  [class.type-pill-credit]="isIncoming(transaction)"
+                  [class.type-pill-debit]="!isIncoming(transaction)">
+                  {{ isIncoming(transaction) ? 'Credit' : 'Debit' }}
+                </span>
+              </td>
+            </ng-container>
+            <ng-container matColumnDef="account">
+              <th mat-header-cell *matHeaderCellDef>Account</th>
+              <td mat-cell *matCellDef="let transaction">{{ transactionAccount(transaction) }}</td>
+            </ng-container>
+            <ng-container matColumnDef="label">
+              <th mat-header-cell *matHeaderCellDef>Description</th>
+              <td mat-cell *matCellDef="let transaction">{{ transactionLabel(transaction) }}</td>
+            </ng-container>
+            <ng-container matColumnDef="amount">
+              <th mat-header-cell *matHeaderCellDef>Amount</th>
+              <td mat-cell *matCellDef="let transaction" class="amount-cell"
+                [class.credit]="isIncoming(transaction)" [class.debit]="!isIncoming(transaction)">
+                {{ isIncoming(transaction) ? '+' : '-' }}{{ transaction.amount | currencyCents }}
+              </td>
+            </ng-container>
+            <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+            <tr mat-row *matRowDef="let transaction; columns: displayedColumns;"></tr>
+          </table>
+        </div>
+      </mat-card-content>
+    </mat-card>
+
+    <aside class="account-sidebar">
+      <div class="notice notice-info alert alert-info" *ngIf="submitting" role="status">
+        <span class="notice-body">Processing transaction...</span>
+      </div>
+      <div class="notice notice-success alert alert-success" *ngIf="message" role="status">
+        <span class="notice-body">{{ message }}</span>
+      </div>
+      <div class="notice notice-error alert alert-danger" *ngIf="error" role="alert">
+        <span class="notice-body">
+          <span class="notice-title">We couldn't complete that request</span>
+          <span class="notice-detail">{{ error }}</span>
+        </span>
+      </div>
+
+      <mat-card class="action-card">
+        <mat-card-content>
+          <form class="card-form" [formGroup]="paymentForm" (ngSubmit)="submitPayment()" novalidate>
+            <h2 mat-card-title>Send a Payment</h2>
+            <mat-form-field appearance="outline">
+              <mat-label>Recipient</mat-label>
+              <mat-select id="payment-recipient" formControlName="recipient">
+                <mat-option *ngFor="let account of paymentRecipients" [value]="account.account_num">
+                  {{ account.label }} - {{ account.account_num }}
+                </mat-option>
+                <mat-option value="add">New recipient</mat-option>
+              </mat-select>
+              <mat-error *ngIf="paymentForm.controls.recipient.touched && paymentForm.controls.recipient.invalid">
+                Please select a recipient.
+              </mat-error>
+            </mat-form-field>
+            <div *ngIf="paymentForm.value.recipient === 'add'">
+              <mat-form-field appearance="outline">
+                <mat-label>Account Number</mat-label>
+                <input matInput formControlName="newAccount" inputmode="numeric">
+                <mat-error *ngIf="paymentForm.controls.newAccount.touched && paymentForm.controls.newAccount.invalid">
+                  Enter a 10-digit account number.
+                </mat-error>
+              </mat-form-field>
+              <mat-form-field appearance="outline">
+                <mat-label>Contact Label (Optional)</mat-label>
+                <input matInput formControlName="newLabel">
+              </mat-form-field>
+            </div>
+            <mat-form-field appearance="outline">
+              <mat-label>Transaction Amount</mat-label>
+              <input matInput type="number" step="0.01" min="0.01" [max]="(balance || 0) / 100" formControlName="amount">
+              <mat-error *ngIf="paymentForm.controls.amount.touched && paymentForm.controls.amount.invalid">
+                Enter a positive transaction amount.
+              </mat-error>
+            </mat-form-field>
+            <button mat-raised-button color="primary" type="submit" [disabled]="submitting">
+              <mat-spinner *ngIf="submitting" class="button-spinner" diameter="20" aria-label="Processing transaction"></mat-spinner>
+              <span>Send Payment</span>
+            </button>
+          </form>
+        </mat-card-content>
+      </mat-card>
+
+      <mat-card class="action-card">
+        <mat-card-content>
+          <form class="card-form" [formGroup]="depositForm" (ngSubmit)="submitDeposit()" novalidate>
+            <h2 mat-card-title>Make a Deposit</h2>
+            <mat-form-field appearance="outline">
+              <mat-label>External Account</mat-label>
+              <mat-select id="deposit-account" formControlName="account">
+                <mat-option *ngFor="let account of depositAccounts" [value]="externalValue(account)">
+                  {{ account.label }} - {{ account.account_num }} - {{ account.routing_num }}
+                </mat-option>
+                <mat-option value="add">New external account</mat-option>
+              </mat-select>
+              <mat-error *ngIf="depositForm.controls.account.touched && depositForm.controls.account.invalid">
+                Please select an external account.
+              </mat-error>
+            </mat-form-field>
+            <div *ngIf="depositForm.value.account === 'add'">
+              <mat-form-field appearance="outline">
+                <mat-label>Account Number</mat-label>
+                <input matInput formControlName="newAccount" inputmode="numeric">
+                <mat-error *ngIf="depositForm.controls.newAccount.touched && depositForm.controls.newAccount.invalid">
+                  Enter a 10-digit account number.
+                </mat-error>
+              </mat-form-field>
+              <mat-form-field appearance="outline">
+                <mat-label>Routing Number</mat-label>
+                <input matInput formControlName="newRouting" inputmode="numeric">
+                <mat-error *ngIf="depositForm.controls.newRouting.touched && depositForm.controls.newRouting.invalid">
+                  Enter a 9-digit routing number.
+                </mat-error>
+              </mat-form-field>
+              <mat-form-field appearance="outline">
+                <mat-label>Account Label (Optional)</mat-label>
+                <input matInput formControlName="newLabel">
+              </mat-form-field>
+            </div>
+            <mat-form-field appearance="outline">
+              <mat-label>Deposit Amount</mat-label>
+              <input matInput type="number" step="0.01" min="0.01" max="500000" formControlName="amount">
+              <mat-error *ngIf="depositForm.controls.amount.touched && depositForm.controls.amount.invalid">
+                Enter an amount between $0.01 and $500,000.
+              </mat-error>
+            </mat-form-field>
+            <button mat-raised-button color="primary" type="submit" [disabled]="submitting">
+              <mat-spinner *ngIf="submitting" class="button-spinner" diameter="20" aria-label="Processing transaction"></mat-spinner>
+              <span>Deposit</span>
+            </button>
+          </form>
+        </mat-card-content>
+      </mat-card>
+    </aside>
+  </div>
 </main>

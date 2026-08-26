@@ -1,15 +1,35 @@
 <div class="utility-bar">
-  <div class="container utility-content">This website is hosted for demo purposes only. It is not an actual bank.</div>
+  <div class="container utility-content">
+    <span class="utility-fdic">
+      Bank of America deposit products:
+      <span class="utility-fdic-mark">FDIC</span>
+      FDIC-Insured - Backed by the full faith and credit of the U.S. Government
+    </span>
+    <span class="utility-demo">Demo site only. Not an actual bank.</span>
+  </div>
 </div>
 <header class="site-header">
   <div class="container site-header-content">
     <a class="site-brand" routerLink="/home" aria-label="Bank of America home">
       <app-brand-logo></app-brand-logo>
+      <span class="site-brand-tagline">Online Banking</span>
     </a>
     <div class="account-actions" *ngIf="showAccountActions">
-      <span>{{ displayName }}</span>
-      <button type="button" (click)="logout()">Sign out</button>
+      <span class="header-name">{{ displayName }}</span>
+      <span class="header-item">Profile &amp; Settings</span>
+      <span class="header-item">Saved Items</span>
+      <button type="button" (click)="logout()">Log Out</button>
     </div>
   </div>
 </header>
+<nav class="site-nav" *ngIf="showAccountActions" aria-label="Primary">
+  <div class="container site-nav-content">
+    <span class="site-nav-tab site-nav-tab-active" aria-current="page">Accounts</span>
+    <span class="site-nav-tab">Pay &amp; Transfer</span>
+    <span class="site-nav-tab">Tools &amp; Investing</span>
+    <span class="site-nav-tab">Security Center</span>
+    <span class="site-nav-tab">Open an Account</span>
+    <span class="site-nav-tab">Help &amp; Support</span>
+  </div>
+</nav>
 <router-outlet></router-outlet>
