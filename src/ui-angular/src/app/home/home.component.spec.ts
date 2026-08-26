@@ -21,6 +21,7 @@ import { RuntimeConfigService } from '../runtime-config.service';
 
 describe('HomeComponent', () => {
   let component: HomeComponent;
+  let fixture: ComponentFixture<HomeComponent>;
   let api: jasmine.SpyObj<ApiService>;
   const claims = { user: 'testuser', acct: '1011226111', name: 'Test User', iat: 1, exp: 9999999999 };
 
@@ -64,7 +65,7 @@ describe('HomeComponent', () => {
         TransactionsService
       ]
     }).compileComponents();
-    const fixture: ComponentFixture<HomeComponent> = TestBed.createComponent(HomeComponent);
+    fixture = TestBed.createComponent(HomeComponent);
     component = fixture.componentInstance;
     component.ngOnInit();
   });
@@ -84,6 +85,36 @@ describe('HomeComponent', () => {
       amount: 1234, uuid: jasmine.any(String)
     }));
   }));
+
+  it('rejects missing, zero, and negative payment amounts', () => {
+    ['', '0', '-1'].forEach(amount => {
+      component.paymentForm.patchValue({ recipient: '1033623433', amount });
+      component.submitPayment();
+      expect(component.paymentForm.controls.amount.touched).toBeTrue();
+    });
+    expect(api.transaction).not.toHaveBeenCalled();
+  });
+
+  it('marks a missing recipient invalid without submitting', () => {
+    component.paymentForm.patchValue({ recipient: '', amount: '12.34' });
+    component.submitPayment();
+    expect(component.paymentForm.controls.recipient.touched).toBeTrue();
+    expect(component.paymentForm.controls.recipient.hasError('required')).toBeTrue();
+    expect(api.transaction).not.toHaveBeenCalled();
+  });
+
+  it('renders backend payment errors in the alert banner', () => {
+    api.transaction.and.returnValue(throwError(() => ({
+      error: { message: 'Insufficient balance' },
+      status: 400
+    })));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    fixture.detectChanges();
+    const alert = fixture.nativeElement.querySelector('[role="alert"]') as HTMLElement;
+    expect(alert.textContent).toContain(`We couldn't complete that request`);
+    expect(alert.textContent).toContain('Payment failed: Insufficient balance');
+  });
 
   it('shows success and refreshes account data after a plain-text payment response', fakeAsync(() => {
     api.transaction.and.returnValue(of('ok'));
@@ -174,10 +205,12 @@ describe('HomeComponent', () => {
     }];
     component.paymentForm.patchValue({ recipient: '1055757655', amount: '12.34' });
     component.submitPayment();
+    fixture.detectChanges();
+    const alert = fixture.nativeElement.querySelector('[role="alert"]') as HTMLElement;
     expect(api.transaction).toHaveBeenCalled();
     expect(component.submitting).toBeFalse();
-    expect(component.error).toContain('SCREEN-403');
-    expect(component.error).toContain('upstream=http://ledgerwriter:8080/transactions');
+    expect(alert.textContent).toContain('recipient screening declined (code SCREEN-403)');
+    expect(alert.textContent).toContain('upstream=http://ledgerwriter:8080/transactions');
   });
 
   it('refreshes account data after a successful deposit', fakeAsync(() => {
