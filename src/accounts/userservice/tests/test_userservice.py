@@ -36,6 +36,7 @@ from userservice.tests.constants import (
     INVALID_USERNAMES,
     SLACK_CHANNEL,
     SLACK_WEBHOOK_URL,
+    generate_rsa_key,
 )
 
 
@@ -287,6 +288,91 @@ class TestUserservice(unittest.TestCase):
         response = self.test_app.post('/users', data=EXAMPLE_USER_REQUEST.copy())
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, b'failed to create user')
+
+    def test_login_sql_error_500_status_code_error_message(self):
+        """test logging in but the DB throws a SQL error when reading the user"""
+        # mock get_user to throw SQLAlchemyError
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        # send request to test client
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert 500 response code
+        self.assertEqual(response.status_code, 500)
+        # assert we get correct error message
+        self.assertEqual(response.data, b'failed to retrieve user information')
+
+    def test_create_user_201_status_code_pii_escaping_and_unicode(self):
+        """test how PII fields are escaped and that non-ascii values survive"""
+        # mock return value of get_user which checks if user exists as None
+        self.mocked_db.return_value.get_user.return_value = None
+        # mock return value for generate_id from user_db
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        # create example user request with html markup and non-ascii PII
+        example_user_request = EXAMPLE_USER_REQUEST.copy()
+        example_user_request['firstname'] = '<script>alert(1)</script>'
+        example_user_request['lastname'] = 'Jos\u00e9 \u00d1'
+        example_user_request['address'] = '1600 Amphitheatre Pkwy <b>#2</b>'
+        # send request to test client
+        response = self.test_app.post('/users', data=example_user_request)
+        # assert 201 response code
+        self.assertEqual(response.status_code, 201)
+        # get the arg that user_db.add_user was called with
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        # assert script markup was escaped before being persisted
+        self.assertEqual(user_object['firstname'],
+                         '&lt;script&gt;alert(1)&lt;/script&gt;')
+        # bleach.clean keeps its default tag allowlist (b, i, strong, a, ...),
+        # so formatting markup survives into stored PII unescaped
+        self.assertEqual(user_object['address'],
+                         '1600 Amphitheatre Pkwy <b>#2</b>')
+        # assert non-ascii characters are preserved unchanged
+        self.assertEqual(user_object['lastname'], 'Jos\u00e9 \u00d1')
+
+    def test_login_200_status_code_jwt_claims_and_signature(self):
+        """test the signed JWT carries the expected claims and rejects other keys"""
+        example_user = EXAMPLE_USER.copy()
+        self.mocked_db.return_value.get_user.return_value = example_user
+        # set private key
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        with patch('bcrypt.checkpw', return_value=True):
+            response = self.test_app.get('/login',
+                                         query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert 200 response
+        self.assertEqual(response.status_code, 200)
+        token = response.json['token']
+        # assert the token is signed with RS256
+        self.assertEqual(jwt.get_unverified_header(token)['alg'], 'RS256')
+        decoded_value = jwt.decode(algorithms='RS256',
+                                   jwt=token,
+                                   key=EXAMPLE_PUBLIC_KEY,)
+        # assert the account claim comes from the DB record
+        self.assertEqual(decoded_value['acct'], EXAMPLE_USER['accountid'])
+        # assert expiry honours the configured token lifetime
+        self.assertEqual(decoded_value['exp'] - decoded_value['iat'],
+                         self.flask_app.config['EXPIRY_SECONDS'])
+        # assert a token signed with our key does not verify under another key
+        _, other_public_key = generate_rsa_key()
+        with self.assertRaises(jwt.exceptions.InvalidSignatureError):
+            jwt.decode(algorithms='RS256', jwt=token, key=other_public_key)
+
+    def test_create_user_201_status_code_whitespace_only_pii_accepted(self):
+        """test whitespace-only PII values are accepted (documents a validation gap)"""
+        # mock return value of get_user which checks if user exists as None
+        self.mocked_db.return_value.get_user.return_value = None
+        # mock return value for generate_id from user_db
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        # create example user request with whitespace-only required values
+        example_user_request = EXAMPLE_USER_REQUEST.copy()
+        example_user_request['firstname'] = '   '
+        example_user_request['state'] = '\t'
+        # send request to test client
+        response = self.test_app.post('/users', data=example_user_request)
+        # the empty-value check is `not bool(req[f] or req[f].strip())`, which
+        # short-circuits on the truthy unstripped value, so blank-but-not-empty
+        # PII passes validation and is persisted as-is
+        self.assertEqual(response.status_code, 201)
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        self.assertEqual(user_object['firstname'], '   ')
+        self.assertEqual(user_object['state'], '\t')
 
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """
