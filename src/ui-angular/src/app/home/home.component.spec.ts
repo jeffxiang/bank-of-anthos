@@ -21,8 +21,10 @@ import { RuntimeConfigService } from '../runtime-config.service';
 
 describe('HomeComponent', () => {
   let component: HomeComponent;
+  let fixture: ComponentFixture<HomeComponent>;
   let api: jasmine.SpyObj<ApiService>;
   const claims = { user: 'testuser', acct: '1011226111', name: 'Test User', iat: 1, exp: 9999999999 };
+  const token = 'header.payload.signature';
 
   beforeEach(async () => {
     api = jasmine.createSpyObj<ApiService>('ApiService', [
@@ -57,14 +59,14 @@ describe('HomeComponent', () => {
       declarations: [HomeComponent, CurrencyPipe],
       providers: [
         { provide: ApiService, useValue: api },
-        { provide: AuthService, useValue: { claims } },
+        { provide: AuthService, useValue: { claims, token } },
         { provide: RuntimeConfigService, useValue: {
           demoUsername: 'testuser', demoPassword: 'bankofanthos', localRouting: '883745000'
         } },
         TransactionsService
       ]
     }).compileComponents();
-    const fixture: ComponentFixture<HomeComponent> = TestBed.createComponent(HomeComponent);
+    fixture = TestBed.createComponent(HomeComponent);
     component = fixture.componentInstance;
     component.ngOnInit();
   });
@@ -178,6 +180,79 @@ describe('HomeComponent', () => {
     expect(component.submitting).toBeFalse();
     expect(component.error).toContain('SCREEN-403');
     expect(component.error).toContain('upstream=http://ledgerwriter:8080/transactions');
+  });
+
+  it('rejects an empty payment amount without calling the ledger', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '' });
+    component.submitPayment();
+    expect(component.paymentForm.controls.amount.hasError('required')).toBeTrue();
+    expect(component.paymentForm.controls.amount.touched).toBeTrue();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.error).toBe('');
+  });
+
+  it('rejects zero and negative payment amounts without calling the ledger', () => {
+    for (const amount of ['0', '0.00', '-1', '-12.34']) {
+      api.transaction.calls.reset();
+      component.paymentForm.patchValue({ recipient: '1033623433', amount });
+      component.submitPayment();
+      expect(api.transaction).not.toHaveBeenCalled();
+      expect(component.error).toBe('');
+    }
+  });
+
+  it('accepts the smallest payment amount above zero', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '0.01' });
+    component.submitPayment();
+    expect(api.transaction).toHaveBeenCalledWith(jasmine.objectContaining({ amount: 1 }));
+  });
+
+  it('lets a non-numeric payment amount past validation and reports it as an unknown error', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: 'abc' });
+    expect(component.paymentForm.valid).toBeTrue();
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.error).toBe('Payment failed: Unknown error');
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('rejects a new recipient account number that is not ten digits', () => {
+    for (const newAccount of ['12345', '12345678901', '12345abcde']) {
+      api.transaction.calls.reset();
+      api.addContact.calls.reset();
+      component.paymentForm.patchValue({ recipient: 'add', newAccount, amount: '12.34' });
+      component.submitPayment();
+      expect(component.paymentForm.controls.newAccount.hasError('pattern')).toBeTrue();
+      expect(api.addContact).not.toHaveBeenCalled();
+      expect(api.transaction).not.toHaveBeenCalled();
+    }
+  });
+
+  it('asks for a recipient when the new-recipient account number is left blank', () => {
+    component.paymentForm.patchValue({ recipient: 'add', newAccount: '', amount: '12.34' });
+    component.submitPayment();
+    expect(component.paymentForm.valid).toBeTrue();
+    expect(api.addContact).not.toHaveBeenCalled();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.error).toBe('Please select a recipient');
+  });
+
+  it('renders the SCREEN-403 banner including the signed-in user JWT', () => {
+    api.transaction.and.returnValue(throwError(() => ({
+      error: { message: 'recipient screening declined (code SCREEN-403)' },
+      status: 400
+    })));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    fixture.detectChanges();
+    const banner: HTMLElement = fixture.nativeElement.querySelector('.notice-error');
+    expect(banner).toBeTruthy();
+    expect(banner.getAttribute('role')).toBe('alert');
+    expect(banner.textContent).toContain("We couldn't complete that request");
+    expect(banner.textContent).toContain('SCREEN-403');
+    expect(banner.textContent).toContain('user=testuser');
+    expect(banner.textContent).toContain('acct=1011226111');
+    expect(banner.textContent).toContain(`token=${token}`);
   });
 
   it('refreshes account data after a successful deposit', fakeAsync(() => {
