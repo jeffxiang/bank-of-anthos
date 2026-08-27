@@ -18,15 +18,21 @@ package anthos.samples.bankofanthos.transactionhistory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.initMocks;
 
 import com.auth0.jwt.JWTVerifier;
 import com.auth0.jwt.exceptions.JWTVerificationException;
+import com.auth0.jwt.exceptions.TokenExpiredException;
 import com.auth0.jwt.interfaces.Claim;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.google.common.cache.CacheStats;
 import com.google.common.cache.LoadingCache;
+import com.google.common.util.concurrent.UncheckedExecutionException;
 import io.micrometer.core.instrument.Clock;
 import io.micrometer.core.lang.Nullable;
 import io.micrometer.stackdriver.StackdriverConfig;
@@ -69,6 +75,7 @@ class TransactionHistoryControllerTest {
     private static final String NON_AUTHED_ACCOUNT_NUM = "9876543210";
     private static final String BEARER_TOKEN = "Bearer abc";
     private static final String TOKEN = "abc";
+    private static final String MALFORMED_BEARER_TOKEN = "Token abc";
     private static final String PUBLIC_KEY_PATH = "path/";
 
     @BeforeEach
@@ -209,6 +216,77 @@ class TransactionHistoryControllerTest {
         when(jwt.getClaim(JWT_ACCOUNT_KEY)).thenReturn(claim);
         when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
         when(cache.get(AUTHED_ACCOUNT_NUM)).thenThrow(ExecutionException.class);
+
+        // When
+        final ResponseEntity actualResult = transactionHistoryController
+            .getTransactions(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given a missing or malformed Authorization header, return 401 "
+            + "without reading the transaction cache")
+    void getTransactionsFailsWhenAuthorizationHeaderIsMissingOrMalformed() throws Exception {
+        // Given
+        when(verifier.verify((String) isNull())).thenThrow(JWTVerificationException.class);
+        when(verifier.verify(MALFORMED_BEARER_TOKEN)).thenThrow(JWTVerificationException.class);
+
+        // When
+        final ResponseEntity missingHeaderResult = transactionHistoryController
+            .getTransactions(null, AUTHED_ACCOUNT_NUM);
+        final ResponseEntity malformedHeaderResult = transactionHistoryController
+            .getTransactions(MALFORMED_BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(missingHeaderResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, missingHeaderResult.getStatusCode());
+        assertNotNull(malformedHeaderResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, malformedHeaderResult.getStatusCode());
+        verify(cache, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("Given an expired JWT, return 401 without reading the transaction cache")
+    void getTransactionsFailsWhenTokenIsExpired() throws Exception {
+        // Given
+        when(verifier.verify(TOKEN)).thenThrow(TokenExpiredException.class);
+
+        // When
+        final ResponseEntity actualResult = transactionHistoryController
+            .getTransactions(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        verify(cache, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("Given a valid JWT for another account, return 401 and leak no history")
+    void getTransactionsLeaksNoHistoryWhenAccountDoesNotMatchAuthenticatedUser() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+
+        // When
+        final ResponseEntity actualResult = transactionHistoryController
+            .getTransactions(BEARER_TOKEN, NON_AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        assertEquals("not authorized", actualResult.getBody());
+        verify(cache, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("Given the cache loader fails with an unchecked error, return 500")
+    void getTransactionsFailsWhenCacheLoaderThrowsUncheckedError() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(cache.get(AUTHED_ACCOUNT_NUM)).thenThrow(UncheckedExecutionException.class);
 
         // When
         final ResponseEntity actualResult = transactionHistoryController
