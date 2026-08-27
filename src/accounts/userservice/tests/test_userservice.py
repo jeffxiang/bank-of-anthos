@@ -36,6 +36,7 @@ from userservice.tests.constants import (
     INVALID_USERNAMES,
     SLACK_CHANNEL,
     SLACK_WEBHOOK_URL,
+    generate_rsa_key,
 )
 
 
@@ -287,6 +288,90 @@ class TestUserservice(unittest.TestCase):
         response = self.test_app.post('/users', data=EXAMPLE_USER_REQUEST.copy())
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, b'failed to create user')
+
+    def test_create_user_201_status_code_valid_username_boundaries(self):
+        """test usernames at the edges of the 2-15 character rule are accepted"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        valid_usernames = [
+            'ab',              # minimum length
+            '__',              # underscores only, minimum length
+            'a' * 15,          # maximum length
+            'A1_b2C3',         # mixed case, digits and underscore
+            '0123456789',      # digits only
+        ]
+        for valid_username in valid_usernames:
+            example_user_request = EXAMPLE_USER_REQUEST.copy()
+            example_user_request['username'] = valid_username
+            response = self.test_app.post('/users', data=example_user_request)
+            self.assertEqual(response.status_code, 201,
+                             'username {} returned incorrect status code'.format(valid_username))
+            user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+            self.assertEqual(user_object['username'], valid_username)
+
+    def test_create_user_201_status_code_pii_fields_not_validated(self):
+        """test current behavior of PII fields containing whitespace or markup
+
+        Both cases are accepted today: the required-field check passes for
+        whitespace-only values and bleach leaves its default-allowed tags
+        (e.g. <b>) in place, so the raw value reaches the database.
+        """
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        pii_values = {
+            'firstname': '   ',            # whitespace only
+            'lastname': '<b>Doe</b>',      # bleach-allowed markup
+            'ssn': '<b>123-45-6789</b>',   # bleach-allowed markup in an SSN
+            'address': '\t\n',             # whitespace only
+            'state': ' ',                  # whitespace only
+        }
+        for field, value in pii_values.items():
+            example_user_request = EXAMPLE_USER_REQUEST.copy()
+            example_user_request[field] = value
+            response = self.test_app.post('/users', data=example_user_request)
+            self.assertEqual(response.status_code, 201,
+                             '{}={} returned incorrect status code'.format(field, value))
+            user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+            # value is persisted verbatim, without stripping or escaping
+            self.assertEqual(user_object[field], value)
+
+    def test_login_jwt_signing_and_verification_error_paths(self):
+        """test JWT signing failure and verification of a token with the wrong key"""
+        example_user = EXAMPLE_USER.copy()
+        example_user_request = EXAMPLE_USER_REQUEST.copy()
+        self.mocked_db.return_value.get_user.return_value = example_user
+
+        # an unusable signing key raises out of the request handler: there is no
+        # except branch for jwt errors, so the request fails with a 500-class error
+        self.flask_app.config['PRIVATE_KEY'] = 'not-a-key'
+        with patch('bcrypt.checkpw', return_value=True):
+            with self.assertRaises(jwt.exceptions.InvalidKeyError):
+                self.test_app.get('/login', query_string=example_user_request)
+
+        # a correctly signed token cannot be verified with an unrelated public key
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        with patch('bcrypt.checkpw', return_value=True):
+            response = self.test_app.get('/login', query_string=example_user_request)
+        self.assertEqual(response.status_code, 200)
+        _, other_public_key = generate_rsa_key()
+        with self.assertRaises(jwt.exceptions.InvalidSignatureError):
+            jwt.decode(algorithms='RS256',
+                       jwt=response.json['token'],
+                       key=other_public_key)
+
+    def test_db_lookup_error_500_status_code_on_create_and_login(self):
+        """test database failures during user lookup return a 500 on both endpoints"""
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+
+        response = self.test_app.post('/users', data=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data, b'failed to create user')
+        # the user is never written when the existence check fails
+        self.mocked_db.return_value.add_user.assert_not_called()
+
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data, b'failed to retrieve user information')
 
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """
