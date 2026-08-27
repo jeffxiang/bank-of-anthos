@@ -68,6 +68,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+src/ui-angular/coverage/
 
 # Translations
 *.mo

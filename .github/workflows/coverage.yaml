@@ -1,0 +1,115 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Report-only test coverage. This workflow never gates a merge: every step is
+# continue-on-error and no coverage thresholds are enforced.
+name: coverage-report
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  java-coverage:
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+      - name: Run tests with JaCoCo
+        continue-on-error: true
+        run: mvn -B -pl src/ledger/ledgerwriter,src/ledger/balancereader,src/ledger/transactionhistory test
+      - name: Summarize coverage
+        if: always()
+        continue-on-error: true
+        run: |
+          for CSV in src/ledger/*/target/site/jacoco/jacoco.csv; do
+            [ -f "$CSV" ] || continue
+            awk -F, -v f="$CSV" 'NR>1 {bm+=$6; bc+=$7; lm+=$8; lc+=$9}
+              END {printf "%s: line %.1f%% branch %.1f%%\n", f,
+                     (lc+lm) ? 100*lc/(lc+lm) : 0, (bc+bm) ? 100*bc/(bc+bm) : 0}' "$CSV" \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Upload JaCoCo reports
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-reports
+          path: src/ledger/*/target/site/jacoco/
+          if-no-files-found: ignore
+
+  python-coverage:
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - src/accounts/contacts
+          - src/accounts/userservice
+          - src/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Run pytest with coverage
+        continue-on-error: true
+        working-directory: ${{ matrix.service }}
+        run: uv run pytest -p no:warnings --cov=. --cov-report=term --cov-report=xml || [ $? -eq 5 ]
+      - name: Upload coverage.xml
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-coverage-${{ strategy.job-index }}
+          path: ${{ matrix.service }}/coverage.xml
+          if-no-files-found: ignore
+
+  angular-coverage:
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: src/ui-angular
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '16.10.0'
+          cache: 'npm'
+          cache-dependency-path: src/ui-angular/package-lock.json
+      - run: npm ci
+        continue-on-error: true
+      - name: Run karma with coverage
+        continue-on-error: true
+        run: npm run test:coverage
+      - name: Upload coverage report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-angular-coverage
+          path: src/ui-angular/coverage/
+          if-no-files-found: ignore

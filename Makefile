@@ -85,10 +85,15 @@ test-e2e:
 
 test-unit:
 	mvn test
-	for SERVICE in "accounts/contacts" "accounts/userservice"; \
+	for SERVICE in "accounts/contacts" "accounts/userservice" "frontend"; \
 	do \
-		(cd src/$$SERVICE && uv run pytest -v -p no:warnings); \
+		(cd src/$$SERVICE && uv run pytest -v -p no:warnings \
+			--cov=. --cov-report=term --cov-report=xml) || [ $$? -eq 5 ]; \
 	done
+
+# Report-only coverage: never fails on coverage level, only on test failures.
+test-coverage: test-unit
+	(cd src/ui-angular && npm run test:coverage)
 
 upgrade-py-deps:
 	for SERVICE in "frontend" "accounts/contacts" "accounts/userservice" "loadgenerator"; \
