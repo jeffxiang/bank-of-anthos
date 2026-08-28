@@ -27,10 +27,13 @@ import java.util.concurrent.ExecutionException;
 
 import com.auth0.jwt.JWTVerifier;
 import com.auth0.jwt.exceptions.JWTVerificationException;
+import com.auth0.jwt.exceptions.TokenExpiredException;
 import com.auth0.jwt.interfaces.Claim;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.LoadingCache;
+import com.google.common.util.concurrent.UncheckedExecutionException;
+import java.time.Instant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -72,6 +75,9 @@ class BalanceReaderControllerTest {
     private static final String NON_AUTHED_ACCOUNT_NUM = "9876543210";
     private static final String BEARER_TOKEN = "Bearer abc";
     private static final String TOKEN = "abc";
+    private static final String MALFORMED_TOKEN = "not-a-bearer-token";
+    private static final String NOT_AUTHORIZED = "not authorized";
+    private static final String CACHE_ERROR = "cache error";
 
     @BeforeEach
     void setUp() {
@@ -216,6 +222,89 @@ class BalanceReaderControllerTest {
         // Then
         assertNotNull(actualResult);
         assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given no Authorization header, return 401 and never read the cache")
+    void getBalanceFailsWhenTokenIsMissing() throws Exception {
+        // Given
+        when(verifier.verify((String) null)).thenThrow(JWTVerificationException.class);
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(null, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        assertEquals(NOT_AUTHORIZED, actualResult.getBody());
+        verify(cache, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("Given a malformed Authorization header without the Bearer prefix, return 401")
+    void getBalanceFailsWhenTokenIsMalformed() throws Exception {
+        // Given
+        when(verifier.verify(MALFORMED_TOKEN)).thenThrow(JWTVerificationException.class);
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(MALFORMED_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        assertEquals(NOT_AUTHORIZED, actualResult.getBody());
+        verify(cache, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("Given an expired token, return 401")
+    void getBalanceFailsWhenTokenIsExpired() throws Exception {
+        // Given
+        when(verifier.verify(TOKEN)).thenThrow(
+            new TokenExpiredException("The Token has expired", Instant.now().minusSeconds(60)));
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        assertEquals(NOT_AUTHORIZED, actualResult.getBody());
+        verify(cache, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("Given the authenticated user is not authorized for the account, "
+        + "return 401 without loading the balance")
+    void getBalanceDoesNotReadCacheWhenAccountDoesNotMatchAuthenticatedUser() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(BEARER_TOKEN, NON_AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        assertEquals(NOT_AUTHORIZED, actualResult.getBody());
+        verify(cache, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("Given the cache loader fails for an authenticated user, return 500")
+    void getBalanceFailsWhenCacheLoaderThrowsUncheckedException() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(cache.get(AUTHED_ACCOUNT_NUM)).thenThrow(
+            new UncheckedExecutionException(new IllegalStateException("ledger db unavailable")));
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+        assertEquals(CACHE_ERROR, actualResult.getBody());
     }
 
     @Test
