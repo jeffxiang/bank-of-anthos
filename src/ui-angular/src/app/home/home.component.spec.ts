@@ -209,6 +209,51 @@ describe('HomeComponent', () => {
     }));
   }));
 
+  it('blocks a payment with a zero or negative amount', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '0' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.paymentForm.touched).toBeTrue();
+
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '-5' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+  });
+
+  it('blocks a payment with a missing amount', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.paymentForm.controls.amount.hasError('required')).toBeTrue();
+  });
+
+  it('keeps a non-numeric amount from reaching the ledger', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: 'abc' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.error).toBe('Payment failed: Unknown error');
+    expect(component.message).toBe('');
+  });
+
+  it('clears a previous error and resets the payment form after a successful payment', fakeAsync(() => {
+    api.transaction.and.returnValue(throwError(() => ({
+      error: { message: 'recipient screening declined (code SCREEN-403)' },
+      status: 400
+    })));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    expect(component.error).toContain('SCREEN-403');
+
+    api.transaction.and.returnValue(of('ok'));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    tick(250);
+    expect(component.error).toBe('');
+    expect(component.message).toBe('Payment successful');
+    expect(component.paymentForm.value.amount).toBeFalsy();
+    expect(component.submitting).toBeFalse();
+  }));
+
   it('validates and rejects an invalid deposit', () => {
     component.depositForm.patchValue({
       account: 'add', newAccount: '1234567890', newRouting: '883745000', amount: '2'
