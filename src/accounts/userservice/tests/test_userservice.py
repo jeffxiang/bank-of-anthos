@@ -38,6 +38,12 @@ from userservice.tests.constants import (
     SLACK_WEBHOOK_URL,
 )
 
+# PII edge cases, kept here because this slice may only touch this test file
+WHITESPACE_ONLY_PII_FIELDS = ['firstname', 'lastname', 'address', 'state', 'zip', 'ssn']
+UNICODE_NAME = 'Jo\u00e3o \u5c71\u7530 \U0001f3e6'
+SCRIPT_INJECTION_NAME = '<script>alert("xss")</script>Doe'
+OVERLONG_ADDRESS = 'A' * 5000
+
 
 class TestUserservice(unittest.TestCase):
     """
@@ -287,6 +293,74 @@ class TestUserservice(unittest.TestCase):
         response = self.test_app.post('/users', data=EXAMPLE_USER_REQUEST.copy())
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, b'failed to create user')
+
+    def test_create_user_whitespace_only_pii_currently_accepted(self):
+        """characterize whitespace-only PII values, which validation lets through
+
+        KNOWN BUG: __validate_new_user checks
+        `not bool(req[f] or req[f].strip())`, which short-circuits on the truthy
+        raw value, so '   ' never reaches the strip() check. This test pins the
+        current behaviour; flip it to expect 400 once validation is fixed.
+        """
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        for pii_field in WHITESPACE_ONLY_PII_FIELDS:
+            example_user = EXAMPLE_USER_REQUEST.copy()
+            example_user[pii_field] = '   '
+            response = self.test_app.post('/users', data=example_user)
+            self.assertEqual(response.status_code, 201,
+                             '{} behaviour changed'.format(pii_field))
+            user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+            self.assertEqual(user_object[pii_field], '   ')
+
+    def test_create_user_201_status_code_unicode_and_overlong_pii_stored_sanitized(self):
+        """test creating a new user with unicode and over-length PII values"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        example_user = EXAMPLE_USER_REQUEST.copy()
+        example_user['firstname'] = UNICODE_NAME
+        example_user['lastname'] = SCRIPT_INJECTION_NAME
+        example_user['address'] = OVERLONG_ADDRESS
+        response = self.test_app.post('/users', data=example_user)
+        self.assertEqual(response.status_code, 201)
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        # unicode is preserved verbatim, markup is escaped by bleach
+        self.assertEqual(user_object['firstname'], UNICODE_NAME)
+        self.assertNotIn('<script>', user_object['lastname'])
+        # NOTE: no upper length bound is enforced on free-text PII fields
+        self.assertEqual(user_object['address'], OVERLONG_ADDRESS)
+
+    def test_login_sql_error_500_status_code_no_credentials_echoed(self):
+        """test logging in when the user lookup raises a DB error"""
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError(
+            'connection to accounts-db failed'
+        )
+        example_user_request = EXAMPLE_USER_REQUEST.copy()
+        response = self.test_app.get('/login', query_string=example_user_request)
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data, b'failed to retrieve user information')
+        # the submitted password must never be echoed back to the caller
+        self.assertNotIn(example_user_request['password'].encode(), response.data)
+
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_200_status_code_token_payload_excludes_sensitive_fields(self,
+                                                                           _mock_checkpw):
+        """test the issued JWT carries no password hash or PII beyond the user's name"""
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 200)
+        decoded_value = jwt.decode(algorithms='RS256',
+                                   jwt=response.json['token'],
+                                   key=EXAMPLE_PUBLIC_KEY)
+        self.assertEqual(sorted(decoded_value.keys()),
+                         ['acct', 'exp', 'iat', 'name', 'user'])
+        raw_token = response.json['token']
+        for secret in (EXAMPLE_USER['address'],
+                       EXAMPLE_USER['passhash'].decode()):
+            self.assertNotIn(secret, str(decoded_value))
+            self.assertNotIn(secret, raw_token)
 
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """
