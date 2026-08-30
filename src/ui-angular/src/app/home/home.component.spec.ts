@@ -209,6 +209,43 @@ describe('HomeComponent', () => {
     }));
   }));
 
+  it('rejects a payment with a non-positive amount without calling the API', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '0' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.paymentForm.get('amount')!.touched).toBeTrue();
+    expect(component.error).toBe('');
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('rejects a new recipient account that is not ten digits', () => {
+    component.paymentForm.patchValue({
+      recipient: 'add', newAccount: '12345', amount: '12.34'
+    });
+    component.submitPayment();
+    expect(api.addContact).not.toHaveBeenCalled();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.paymentForm.get('newAccount')!.hasError('pattern')).toBeTrue();
+  });
+
+  it('asks for a recipient when adding one without an account number', () => {
+    component.paymentForm.patchValue({ recipient: 'add', newAccount: '', amount: '12.34' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.error).toBe('Please select a recipient');
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('resets the payment form and clears a stale error after success', fakeAsync(() => {
+    component.error = 'Payment failed: Insufficient balance';
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    tick(250);
+    expect(component.error).toBe('');
+    expect(component.paymentForm.get('amount')!.value).toBeNull();
+    expect(component.paymentForm.get('amount')!.touched).toBeFalse();
+  }));
+
   it('validates and rejects an invalid deposit', () => {
     component.depositForm.patchValue({
       account: 'add', newAccount: '1234567890', newRouting: '883745000', amount: '2'
