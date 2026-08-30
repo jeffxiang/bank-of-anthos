@@ -288,6 +288,52 @@ class TestUserservice(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, b'failed to create user')
 
+    def test_create_user_whitespace_only_ssn_documents_validation_gap(self):
+        """test a whitespace-only ssn is accepted today, unlike an empty ssn
+
+        __validate_new_user uses `not bool(req[f] or req[f].strip())`, so a
+        whitespace-only value short-circuits on the truthy raw string and never
+        reaches the strip() check. This pins the current behaviour; it should be
+        a 400 once the validation is tightened.
+        """
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        example_user = EXAMPLE_USER_REQUEST.copy()
+        example_user['ssn'] = '   '
+        response = self.test_app.post('/users', data=example_user)
+        self.assertEqual(response.status_code, 201)
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        self.assertEqual(user_object['ssn'], '   ')
+
+    def test_login_missing_password_param_raises_type_error(self):
+        """test /login without a password param is not handled gracefully
+
+        bleach.clean(None) raises TypeError before any of the handled
+        exceptions, so the request fails with a 500 rather than a 400.
+        """
+        example_user_request = EXAMPLE_USER_REQUEST.copy()
+        example_user_request.pop('password')
+        with self.assertRaises(TypeError):
+            self.test_app.get('/login', query_string=example_user_request)
+
+    @patch('bcrypt.checkpw', return_value=True)
+    @patch('userservice.userservice.jwt.encode',
+           side_effect=jwt.exceptions.InvalidKeyError('bad key'))
+    def test_login_jwt_signing_error_raises(self, _mock_encode, _mock_checkpw):
+        """test a JWT signing failure is not converted into an error response"""
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        with self.assertRaises(jwt.exceptions.InvalidKeyError):
+            self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+
+    def test_login_db_error_500_status_code_error_message(self):
+        """test logging in when the user lookup raises a SQL error"""
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data, b'failed to retrieve user information')
+
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """
         # mock return value of get_user which checks if user exists as None
