@@ -288,6 +288,50 @@ class TestUserservice(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, b'failed to create user')
 
+    def test_create_user_400_status_code_empty_required_field(self):
+        """test creating a new user with an empty value for each required field"""
+        self.mocked_db.return_value.get_user.return_value = None
+        for expected_field in EXPECTED_FIELDS:
+            example_user = EXAMPLE_USER_REQUEST.copy()
+            example_user[expected_field] = ''
+            response = self.test_app.post('/users', data=example_user)
+            self.assertEqual(response.status_code, 400,
+                             'empty {} returned incorrect status code'.format(expected_field))
+            self.assertEqual(response.data, b'missing value for input field(s)',
+                             'empty {} returned unexpected error message'.format(expected_field))
+            self.mocked_db.return_value.add_user.assert_not_called()
+
+    def test_login_sql_error_500_status_code_no_error_detail_leaked(self):
+        """test a DB failure on login returns a generic 500 without internal details"""
+        db_error = 'connection to host db.internal user=admin failed'
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError(db_error)
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert 500 response with the generic message
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data, b'failed to retrieve user information')
+        # assert the underlying DB error is not exposed to the caller
+        self.assertNotIn(db_error.encode(), response.data)
+
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_unusable_private_key_raises_and_issues_no_token(self, _mock_checkpw):
+        """test a JWT signing failure does not produce a token"""
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        # a key that cannot be parsed as RS256 private key material
+        self.flask_app.config['PRIVATE_KEY'] = 'not-a-valid-private-key'
+        with self.assertRaises(jwt.exceptions.InvalidKeyError):
+            self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+
+    def test_login_missing_credentials_raises_before_db_lookup(self):
+        """test login without the required query parameters never reaches the DB"""
+        for missing_param in ('username', 'password'):
+            query_string = {k: v for k, v in EXAMPLE_USER_REQUEST.items()
+                            if k in ('username', 'password') and k != missing_param}
+            with self.assertRaises(TypeError,
+                                   msg='missing {} did not fail'.format(missing_param)):
+                self.test_app.get('/login', query_string=query_string)
+            self.mocked_db.return_value.get_user.assert_not_called()
+
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """
         # mock return value of get_user which checks if user exists as None
