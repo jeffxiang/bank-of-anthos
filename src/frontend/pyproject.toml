@@ -35,4 +35,13 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pylint>=3.0",
+    "pytest>=7.4.4",
+    "pytest-cov>=4.1.0",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[tool.coverage.run]
+branch = true
+omit = ["tests/*"]

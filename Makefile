@@ -85,9 +85,10 @@ test-e2e:
 
 test-unit:
 	mvn test
-	for SERVICE in "accounts/contacts" "accounts/userservice"; \
+	for SERVICE in "accounts/contacts" "accounts/userservice" "frontend"; \
 	do \
-		(cd src/$$SERVICE && uv run pytest -v -p no:warnings); \
+		(cd src/$$SERVICE && uv run pytest -v -p no:warnings \
+			--cov=. --cov-report=term --cov-report=xml:coverage.xml) || [ $$? -eq 5 ]; \
 	done
 
 upgrade-py-deps:
