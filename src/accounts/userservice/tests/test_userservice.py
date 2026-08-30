@@ -288,6 +288,57 @@ class TestUserservice(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, b'failed to create user')
 
+    def test_create_user_empty_pii_400_status_code_error_message(self):
+        """test creating a new user with an empty value for each PII field"""
+        self.mocked_db.return_value.get_user.return_value = None
+        pii_fields = [f for f in EXPECTED_FIELDS
+                      if f not in ('username', 'password', 'password-repeat')]
+        for pii_field in pii_fields:
+            example_user = EXAMPLE_USER_REQUEST.copy()
+            example_user[pii_field] = ''
+            response = self.test_app.post('/users', data=example_user)
+            self.assertEqual(response.status_code, 400,
+                             '{} returned incorrect status code'.format(pii_field))
+            self.assertEqual(response.data, b'missing value for input field(s)',
+                             '{} returned unexpected error message'.format(pii_field))
+            self.mocked_db.return_value.add_user.assert_not_called()
+
+    def test_create_user_whitespace_only_ssn_201_status_code_stored_unchanged(self):
+        """test whitespace-only ssn passes validation and is stored verbatim"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        example_user = EXAMPLE_USER_REQUEST.copy()
+        example_user['ssn'] = '   '
+        response = self.test_app.post('/users', data=example_user)
+        # whitespace-only values satisfy the current required-value check
+        self.assertEqual(response.status_code, 201)
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        self.assertEqual(user_object['ssn'], '   ')
+
+    def test_create_user_html_in_pii_sanitized_before_storage(self):
+        """test html in PII fields is escaped before the user is stored"""
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        example_user = EXAMPLE_USER_REQUEST.copy()
+        example_user['firstname'] = "<script>alert('x')</script>John"
+        example_user['address'] = '<img src=x onerror=alert(1)>'
+        response = self.test_app.post('/users', data=example_user)
+        self.assertEqual(response.status_code, 201)
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        for stored_field in ('firstname', 'address'):
+            self.assertNotIn('<', user_object[stored_field],
+                             '{} was stored with unescaped html'.format(stored_field))
+            self.assertIn('&lt;', user_object[stored_field],
+                          '{} was not escaped'.format(stored_field))
+
+    def test_login_db_error_500_status_code_error_message(self):
+        """test logging in when the user lookup raises a database error"""
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data, b'failed to retrieve user information')
+
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """
         # mock return value of get_user which checks if user exists as None
