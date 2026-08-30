@@ -180,6 +180,56 @@ describe('HomeComponent', () => {
     expect(component.error).toContain('upstream=http://ledgerwriter:8080/transactions');
   });
 
+  it('rejects payments with a missing, zero or negative amount', () => {
+    for (const amount of ['', '0', '0.00', '-5', '-0.01']) {
+      component.paymentForm.patchValue({ recipient: '1033623433', amount });
+      component.submitPayment();
+      expect(api.transaction).not.toHaveBeenCalled();
+      expect(component.paymentForm.touched).toBeTrue();
+      expect(component.submitting).toBeFalse();
+      expect(component.error).toBe('');
+    }
+  });
+
+  it('rejects a new recipient whose account number is not ten digits', () => {
+    for (const account of ['123', '12345678901', '12345仮6789', '12341545🐻', 'abcdefghij']) {
+      component.paymentForm.patchValue({ recipient: 'add', newAccount: account, amount: '12.34' });
+      component.submitPayment();
+      expect(component.paymentForm.get('newAccount')!.hasError('pattern')).toBeTrue();
+      expect(api.addContact).not.toHaveBeenCalled();
+      expect(api.transaction).not.toHaveBeenCalled();
+    }
+  });
+
+  it('lets a non-numeric amount past validation and fails with an unhelpful error', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: 'abc' });
+    component.submitPayment();
+    expect(component.paymentForm.valid).toBeTrue();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.error).toBe('Payment failed: Unknown error');
+    expect(component.submitting).toBeFalse();
+  });
+
+  it('keeps payment input after a declined transfer and clears the error on retry', fakeAsync(() => {
+    api.transaction.and.returnValue(throwError(() => ({
+      error: { message: 'recipient screening declined (code SCREEN-403)' },
+      status: 400
+    })));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    expect(component.error).toContain('SCREEN-403');
+    expect(component.message).toBe('');
+    expect(component.paymentForm.value.amount).toBe('12.34');
+    expect(component.paymentForm.value.recipient).toBe('1033623433');
+
+    api.transaction.and.returnValue(of('ok'));
+    component.submitPayment();
+    tick(250);
+    expect(component.error).toBe('');
+    expect(component.message).toBe('Payment successful');
+    expect(component.paymentForm.value.amount).toBeNull();
+  }));
+
   it('refreshes account data after a successful deposit', fakeAsync(() => {
     const response = new Subject<string>();
     api.transaction.and.returnValue(response);
