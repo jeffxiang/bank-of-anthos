@@ -180,6 +180,51 @@ describe('HomeComponent', () => {
     expect(component.error).toContain('upstream=http://ledgerwriter:8080/transactions');
   });
 
+  it('keeps a non-numeric payment amount away from the ledger', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34abc' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.submitting).toBeFalse();
+    expect(component.message).toBe('');
+    expect(component.error).toBe('Payment failed: Unknown error');
+  });
+
+  it('blocks a non-positive payment amount and marks the form touched', () => {
+    for (const amount of ['0', '-5', '0.001']) {
+      component.paymentForm.patchValue({ recipient: '1033623433', amount });
+      component.submitPayment();
+      expect(component.paymentForm.invalid).toBeTrue();
+    }
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.paymentForm.touched).toBeTrue();
+    expect(component.error).toBe('');
+  });
+
+  it('rejects a new recipient without an account number', () => {
+    component.paymentForm.patchValue({ recipient: 'add', newAccount: '', amount: '12.34' });
+    component.submitPayment();
+    expect(api.addContact).not.toHaveBeenCalled();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.error).toBe('Please select a recipient');
+  });
+
+  it('clears a prior SCREEN-403 banner once a payment succeeds', fakeAsync(() => {
+    api.transaction.and.returnValue(throwError(() => ({
+      error: { message: 'recipient screening declined (code SCREEN-403)' },
+      status: 400
+    })));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    expect(component.error).toContain('SCREEN-403');
+
+    api.transaction.and.returnValue(of('ok'));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    tick(250);
+    expect(component.error).toBe('');
+    expect(component.message).toBe('Payment successful');
+  }));
+
   it('refreshes account data after a successful deposit', fakeAsync(() => {
     const response = new Subject<string>();
     api.transaction.and.returnValue(response);
