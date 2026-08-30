@@ -21,6 +21,7 @@ import { RuntimeConfigService } from '../runtime-config.service';
 
 describe('HomeComponent', () => {
   let component: HomeComponent;
+  let fixture: ComponentFixture<HomeComponent>;
   let api: jasmine.SpyObj<ApiService>;
   const claims = { user: 'testuser', acct: '1011226111', name: 'Test User', iat: 1, exp: 9999999999 };
 
@@ -64,7 +65,7 @@ describe('HomeComponent', () => {
         TransactionsService
       ]
     }).compileComponents();
-    const fixture: ComponentFixture<HomeComponent> = TestBed.createComponent(HomeComponent);
+    fixture = TestBed.createComponent(HomeComponent);
     component = fixture.componentInstance;
     component.ngOnInit();
   });
@@ -207,6 +208,58 @@ describe('HomeComponent', () => {
     expect(api.addContact).toHaveBeenCalledWith('testuser', jasmine.objectContaining({
       routing_num: '883745000'
     }));
+  }));
+
+  it('blocks a payment with a missing recipient or amount and marks the fields touched', () => {
+    component.paymentForm.patchValue({ recipient: '', amount: '12.34' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.paymentForm.controls.recipient.touched).toBeTrue();
+
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.paymentForm.controls.amount.touched).toBeTrue();
+    expect(component.error).toBe('');
+  });
+
+  it('blocks a payment with a zero or negative amount', () => {
+    for (const amount of ['0', '-5']) {
+      component.paymentForm.patchValue({ recipient: '1033623433', amount });
+      component.submitPayment();
+      expect(api.transaction).not.toHaveBeenCalled();
+      expect(component.submitting).toBeFalse();
+    }
+  });
+
+  it('never sends a non-numeric amount to the backend', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: 'abc' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.submitting).toBeFalse();
+    expect(component.error).toContain('Payment failed');
+  });
+
+  it('renders a backend 400 in the error banner and clears it on the next successful payment', fakeAsync(() => {
+    fixture.detectChanges();
+    api.transaction.and.returnValue(throwError(() => ({
+      error: { message: 'Account balance insufficient' }, status: 400
+    })));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '5' });
+    component.submitPayment();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.notice-error').textContent)
+      .toContain('Account balance insufficient');
+
+    api.transaction.and.returnValue(of('ok'));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '5' });
+    component.submitPayment();
+    tick(250);
+    fixture.detectChanges();
+    expect(component.error).toBe('');
+    expect(fixture.nativeElement.querySelector('.notice-error')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.notice-success').textContent)
+      .toContain('Payment successful');
   }));
 
   it('validates and rejects an invalid deposit', () => {
