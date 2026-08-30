@@ -288,6 +288,69 @@ class TestUserservice(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, b'failed to create user')
 
+    def test_create_user_whitespace_only_pii_201_status_code_values_stored(self):
+        """test whitespace-only PII fields are accepted rather than rejected
+
+        Documents current behaviour: __validate_new_user checks
+        `not bool(req[f] or req[f].strip())`, which is False for ' ' because the
+        first operand short-circuits, so blank-looking PII reaches the database.
+        """
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        for field in ('ssn', 'address', 'state', 'firstname'):
+            example_user_request = EXAMPLE_USER_REQUEST.copy()
+            example_user_request[field] = '   '
+            response = self.test_app.post('/users', data=example_user_request)
+            self.assertEqual(response.status_code, 201,
+                             'field {} returned incorrect status code'.format(field))
+            user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+            self.assertEqual(user_object[field], '   ',
+                             'field {} was not stored verbatim'.format(field))
+
+    def test_create_user_markup_pii_201_status_code_values_sanitized(self):
+        """test markup in PII fields is sanitized by bleach before being stored
+
+        Script tags are escaped, while tags on bleach's default allow-list (such
+        as <b>) are stored verbatim.
+        """
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        example_user_request = EXAMPLE_USER_REQUEST.copy()
+        example_user_request['ssn'] = '<script>alert(1)</script>123'
+        example_user_request['address'] = '<b>1600 Amphitheatre Parkway</b>'
+        response = self.test_app.post('/users', data=example_user_request)
+        self.assertEqual(response.status_code, 201)
+        user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+        self.assertEqual(user_object['ssn'],
+                         '&lt;script&gt;alert(1)&lt;/script&gt;123')
+        self.assertEqual(user_object['address'],
+                         '<b>1600 Amphitheatre Parkway</b>')
+
+    def test_login_db_error_500_status_code_error_message(self):
+        """test logging in when the user lookup raises a database error"""
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert 500 response
+        self.assertEqual(response.status_code, 500)
+        # assert we get correct error message
+        self.assertEqual(response.data, b'failed to retrieve user information')
+
+    @patch('userservice.userservice.requests.post')
+    def test_login_db_error_sends_slack_notification(self, mock_post):
+        """test a database failure during login emits a Slack alert"""
+        self.flask_app.config['SLACK_WEBHOOK_URL'] = SLACK_WEBHOOK_URL
+        self.flask_app.config['SLACK_CHANNEL'] = SLACK_CHANNEL
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        response = self.test_app.get('/login',
+                                     query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert behaviour on failure is unchanged by the alert
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(mock_post.call_args.kwargs['url'], SLACK_WEBHOOK_URL)
+        payload = mock_post.call_args.kwargs['json']
+        self.assertEqual(payload['channel'], SLACK_CHANNEL)
+        self.assertIn('[userservice] /login failed', payload['text'])
+
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """
         # mock return value of get_user which checks if user exists as None
