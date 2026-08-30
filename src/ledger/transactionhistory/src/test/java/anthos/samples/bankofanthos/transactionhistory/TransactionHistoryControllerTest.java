@@ -18,15 +18,20 @@ package anthos.samples.bankofanthos.transactionhistory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.initMocks;
 
 import com.auth0.jwt.JWTVerifier;
 import com.auth0.jwt.exceptions.JWTVerificationException;
+import com.auth0.jwt.exceptions.TokenExpiredException;
 import com.auth0.jwt.interfaces.Claim;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.google.common.cache.CacheStats;
 import com.google.common.cache.LoadingCache;
+import com.google.common.util.concurrent.UncheckedExecutionException;
 import io.micrometer.core.instrument.Clock;
 import io.micrometer.core.lang.Nullable;
 import io.micrometer.stackdriver.StackdriverConfig;
@@ -70,6 +75,8 @@ class TransactionHistoryControllerTest {
     private static final String BEARER_TOKEN = "Bearer abc";
     private static final String TOKEN = "abc";
     private static final String PUBLIC_KEY_PATH = "path/";
+    private static final String EXPIRED_TOKEN = "expired";
+    private static final String BEARER_EXPIRED_TOKEN = "Bearer expired";
 
     @BeforeEach
     void setUp() {
@@ -217,6 +224,73 @@ class TransactionHistoryControllerTest {
         // Then
         assertNotNull(actualResult);
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given the Authorization header is missing, return 401")
+    void getTransactionsFailsWhenTokenIsMissing() throws Exception {
+        // Given
+        when(verifier.verify((String) null)).thenThrow(JWTVerificationException.class);
+
+        // When
+        final ResponseEntity actualResult = transactionHistoryController
+            .getTransactions(null, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        verify(cache, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("Given the token signature is expired, return 401")
+    void getTransactionsFailsWhenTokenIsExpired() throws Exception {
+        // Given
+        when(verifier.verify(EXPIRED_TOKEN)).thenThrow(TokenExpiredException.class);
+
+        // When
+        final ResponseEntity actualResult = transactionHistoryController
+            .getTransactions(BEARER_EXPIRED_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        verify(cache, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("Given the account does not match the authenticated user, "
+            + "do not read that account from the cache")
+    void getTransactionsDoesNotReadCacheWhenAccountDoesNotMatch() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+
+        // When
+        final ResponseEntity actualResult = transactionHistoryController
+            .getTransactions(BEARER_TOKEN, NON_AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        verify(cache, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("Given the cache loader throws an unchecked error, return 500")
+    void getTransactionsFailsWhenCacheLoaderThrowsUncheckedError() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(cache.get(AUTHED_ACCOUNT_NUM))
+            .thenThrow(UncheckedExecutionException.class);
+
+        // When
+        final ResponseEntity actualResult = transactionHistoryController
+            .getTransactions(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+        verify(cache).get(AUTHED_ACCOUNT_NUM);
     }
 
 }
