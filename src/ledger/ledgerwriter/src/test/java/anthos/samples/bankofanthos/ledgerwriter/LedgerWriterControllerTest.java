@@ -18,9 +18,17 @@ package anthos.samples.bankofanthos.ledgerwriter;
 
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION;
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_INSUFFICIENT_BALANCE;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_INVALID_AMOUNT;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_INVALID_NUMBER;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_NOT_AUTHENTICATED;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_RECIPIENT_SCREENED;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_SEND_TO_SELF;
 import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.contains;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
@@ -43,11 +51,14 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 import org.mockito.Mock;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestTemplate;
 
 class LedgerWriterControllerTest {
 
@@ -69,6 +80,8 @@ class LedgerWriterControllerTest {
     private Clock clock;
     @Mock
     private SlackNotifier slackNotifier;
+    @Mock
+    private RestTemplate restTemplate;
 
     private static final String VERSION = "v0.1.0";
     private static final String LOCAL_ROUTING_NUM = "123456789";
@@ -82,10 +95,44 @@ class LedgerWriterControllerTest {
     private static final int LARGER_THAN_SENDER_BALANCE = 1000;
     private static final int SMALLER_THAN_SENDER_BALANCE = 10;
 
+    private static final String TO_ACCOUNT_NUM = "5678901234";
+    private static final String TO_ROUTING_NUM = "567891234";
+    private static final String OTHER_ACCOUNT_NUM = "0987654321";
+    private static final String SCREENED_ACCOUNT_NUM = "1055757655";
+    private static final String SCREENED_ACCOUNTS =
+            " 1055757655 ,, 2055757655 ";
+    private static final int VALID_AMOUNT = 3755;
+
+    private static final String[] INVALID_ACCT_NUM = {
+        "123456789",
+        "12345678900",
+        "",
+        "abcdefghij",
+        "123 456789",
+        "12345仮6789",
+        "12341545🐻"
+    };
+
+    private static final String[] INVALID_ROUTING_NUM = {
+        "12345678",
+        "1234567890",
+        "",
+        "abcdefghi",
+        "12 456789",
+        "12345仮67",
+        "1234154🐻"
+    };
+
+    private static final Integer[] INVALID_AMOUNT = {
+        0, -23, Integer.MIN_VALUE
+    };
+
+    private StackdriverMeterRegistry meterRegistry;
+
     @BeforeEach
     void setUp() {
         initMocks(this);
-        StackdriverMeterRegistry meterRegistry = new StackdriverMeterRegistry(new StackdriverConfig() {
+        meterRegistry = new StackdriverMeterRegistry(new StackdriverConfig() {
               @Override
               public boolean enabled() {
                 return false;
@@ -414,5 +461,331 @@ class LedgerWriterControllerTest {
                 EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION,
                 duplicateResult.getBody());
         assertEquals(HttpStatus.BAD_REQUEST, duplicateResult.getStatusCode());
+    }
+
+    /**
+     * Builds a controller backed by a real TransactionValidator so the
+     * validation branches are exercised end to end from the write path.
+     */
+    private LedgerWriterController controllerWithScreenedAccounts(
+            String screenedAccounts) {
+        LedgerWriterController controller = new LedgerWriterController(
+                verifier, meterRegistry, transactionRepository,
+                new TransactionValidator(screenedAccounts),
+                LOCAL_ROUTING_NUM, BALANCES_API_ADDR, VERSION);
+        controller.slackNotifier = slackNotifier;
+        controller.restTemplate = restTemplate;
+        return controller;
+    }
+
+    private void givenTransaction(String fromAcct, String fromRoute,
+            String toAcct, String toRoute, Integer amount, String uuid) {
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getFromAccountNum()).thenReturn(fromAcct);
+        when(transaction.getFromRoutingNum()).thenReturn(fromRoute);
+        when(transaction.getToAccountNum()).thenReturn(toAcct);
+        when(transaction.getToRoutingNum()).thenReturn(toRoute);
+        when(transaction.getAmount()).thenReturn(amount);
+        when(transaction.getRequestUuid()).thenReturn(uuid);
+    }
+
+    private void assertRejectedWithoutLedgerWrite(ResponseEntity actualResult,
+            String expectedMessage) {
+        assertNotNull(actualResult);
+        assertEquals(expectedMessage, actualResult.getBody());
+        assertEquals(HttpStatus.BAD_REQUEST, actualResult.getStatusCode());
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    @DisplayName("Given the recipient is a screened account, return HTTP "
+            + "Status 400, write nothing to the ledger and alert")
+    void addTransactionWhenRecipientScreened(TestInfo testInfo) {
+        // Given
+        LedgerWriterController controller =
+                controllerWithScreenedAccounts(SCREENED_ACCOUNTS);
+        givenTransaction(AUTHED_ACCOUNT_NUM, NON_LOCAL_ROUTING_NUM,
+                SCREENED_ACCOUNT_NUM, TO_ROUTING_NUM, VALID_AMOUNT,
+                testInfo.getDisplayName());
+
+        // When
+        final ResponseEntity actualResult =
+                controller.addTransaction(BEARER_TOKEN, transaction);
+
+        // Then
+        assertRejectedWithoutLedgerWrite(actualResult,
+                EXCEPTION_MESSAGE_RECIPIENT_SCREENED);
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_RECIPIENT_SCREENED));
+    }
+
+    @Test
+    @DisplayName("Given a screening list that does not contain the recipient, "
+            + "the transaction is written to the ledger")
+    void addTransactionWhenRecipientNotScreened(TestInfo testInfo) {
+        // Given
+        LedgerWriterController controller =
+                controllerWithScreenedAccounts(SCREENED_ACCOUNTS);
+        givenTransaction(AUTHED_ACCOUNT_NUM, NON_LOCAL_ROUTING_NUM,
+                TO_ACCOUNT_NUM, TO_ROUTING_NUM, VALID_AMOUNT,
+                testInfo.getDisplayName());
+
+        // When
+        final ResponseEntity actualResult =
+                controller.addTransaction(BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.CREATED, actualResult.getStatusCode());
+        verify(transactionRepository).save(transaction);
+        verifyNoInteractions(slackNotifier);
+    }
+
+    @Test
+    @DisplayName("Given no screening list is configured, the transaction is "
+            + "written to the ledger")
+    void addTransactionWhenScreeningListUnset(TestInfo testInfo) {
+        // Given
+        LedgerWriterController controller =
+                controllerWithScreenedAccounts(null);
+        givenTransaction(AUTHED_ACCOUNT_NUM, NON_LOCAL_ROUTING_NUM,
+                SCREENED_ACCOUNT_NUM, TO_ROUTING_NUM, VALID_AMOUNT,
+                testInfo.getDisplayName());
+
+        // When
+        final ResponseEntity actualResult =
+                controller.addTransaction(BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.CREATED, actualResult.getStatusCode());
+        verify(transactionRepository).save(transaction);
+    }
+
+    @Test
+    @DisplayName("Given the sender account does not match the JWT account "
+            + "claim, return HTTP Status 400 and write nothing to the ledger")
+    void addTransactionWhenSenderNotAuthenticated(TestInfo testInfo) {
+        // Given
+        LedgerWriterController controller = controllerWithScreenedAccounts("");
+        givenTransaction(OTHER_ACCOUNT_NUM, LOCAL_ROUTING_NUM,
+                TO_ACCOUNT_NUM, TO_ROUTING_NUM, VALID_AMOUNT,
+                testInfo.getDisplayName());
+
+        // When
+        final ResponseEntity actualResult =
+                controller.addTransaction(BEARER_TOKEN, transaction);
+
+        // Then
+        assertRejectedWithoutLedgerWrite(actualResult,
+                EXCEPTION_MESSAGE_NOT_AUTHENTICATED);
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_NOT_AUTHENTICATED));
+    }
+
+    @Test
+    @DisplayName("Given an invalid routing number, return HTTP Status 400 and "
+            + "write nothing to the ledger")
+    void addTransactionWhenRoutingNumberInvalid(TestInfo testInfo) {
+        LedgerWriterController controller = controllerWithScreenedAccounts("");
+        for (String invalidRoutingNum : INVALID_ROUTING_NUM) {
+            // Given
+            givenTransaction(AUTHED_ACCOUNT_NUM, invalidRoutingNum,
+                    TO_ACCOUNT_NUM, TO_ROUTING_NUM, VALID_AMOUNT,
+                    testInfo.getDisplayName());
+
+            // When
+            final ResponseEntity senderResult =
+                    controller.addTransaction(BEARER_TOKEN, transaction);
+
+            // Given
+            givenTransaction(AUTHED_ACCOUNT_NUM, NON_LOCAL_ROUTING_NUM,
+                    TO_ACCOUNT_NUM, invalidRoutingNum, VALID_AMOUNT,
+                    testInfo.getDisplayName());
+
+            // When
+            final ResponseEntity receiverResult =
+                    controller.addTransaction(BEARER_TOKEN, transaction);
+
+            // Then
+            assertRejectedWithoutLedgerWrite(senderResult,
+                    EXCEPTION_MESSAGE_INVALID_NUMBER);
+            assertRejectedWithoutLedgerWrite(receiverResult,
+                    EXCEPTION_MESSAGE_INVALID_NUMBER);
+        }
+    }
+
+    @Test
+    @DisplayName("Given an invalid account number, return HTTP Status 400 and "
+            + "write nothing to the ledger")
+    void addTransactionWhenAccountNumberInvalid(TestInfo testInfo) {
+        LedgerWriterController controller = controllerWithScreenedAccounts("");
+        for (String invalidAcctNum : INVALID_ACCT_NUM) {
+            // Given
+            givenTransaction(invalidAcctNum, NON_LOCAL_ROUTING_NUM,
+                    TO_ACCOUNT_NUM, TO_ROUTING_NUM, VALID_AMOUNT,
+                    testInfo.getDisplayName());
+
+            // When
+            final ResponseEntity senderResult =
+                    controller.addTransaction(BEARER_TOKEN, transaction);
+
+            // Given
+            givenTransaction(AUTHED_ACCOUNT_NUM, NON_LOCAL_ROUTING_NUM,
+                    invalidAcctNum, TO_ROUTING_NUM, VALID_AMOUNT,
+                    testInfo.getDisplayName());
+
+            // When
+            final ResponseEntity receiverResult =
+                    controller.addTransaction(BEARER_TOKEN, transaction);
+
+            // Then
+            assertRejectedWithoutLedgerWrite(senderResult,
+                    EXCEPTION_MESSAGE_INVALID_NUMBER);
+            assertRejectedWithoutLedgerWrite(receiverResult,
+                    EXCEPTION_MESSAGE_INVALID_NUMBER);
+        }
+    }
+
+    @Test
+    @DisplayName("Given a malformed transaction amount, return HTTP Status "
+            + "400 and write nothing to the ledger")
+    void addTransactionWhenAmountInvalid(TestInfo testInfo) {
+        LedgerWriterController controller = controllerWithScreenedAccounts("");
+        for (Integer invalidAmount : INVALID_AMOUNT) {
+            // Given
+            givenTransaction(AUTHED_ACCOUNT_NUM, NON_LOCAL_ROUTING_NUM,
+                    TO_ACCOUNT_NUM, TO_ROUTING_NUM, invalidAmount,
+                    testInfo.getDisplayName());
+
+            // When
+            final ResponseEntity actualResult =
+                    controller.addTransaction(BEARER_TOKEN, transaction);
+
+            // Then
+            assertRejectedWithoutLedgerWrite(actualResult,
+                    EXCEPTION_MESSAGE_INVALID_AMOUNT);
+        }
+    }
+
+    @Test
+    @DisplayName("Given the sender is also the receiver, return HTTP Status "
+            + "400 and write nothing to the ledger")
+    void addTransactionWhenSenderIsReceiver(TestInfo testInfo) {
+        // Given
+        LedgerWriterController controller = controllerWithScreenedAccounts("");
+        givenTransaction(AUTHED_ACCOUNT_NUM, LOCAL_ROUTING_NUM,
+                AUTHED_ACCOUNT_NUM, LOCAL_ROUTING_NUM, VALID_AMOUNT,
+                testInfo.getDisplayName());
+
+        // When
+        final ResponseEntity actualResult =
+                controller.addTransaction(BEARER_TOKEN, transaction);
+
+        // Then
+        assertRejectedWithoutLedgerWrite(actualResult,
+                EXCEPTION_MESSAGE_SEND_TO_SELF);
+    }
+
+    @Test
+    @DisplayName("Given the same account number at a different bank, the "
+            + "transaction is written to the ledger")
+    void addTransactionWhenSameAccountNumDifferentBank(TestInfo testInfo) {
+        // Given
+        LedgerWriterController controller = controllerWithScreenedAccounts("");
+        givenTransaction(AUTHED_ACCOUNT_NUM, NON_LOCAL_ROUTING_NUM,
+                AUTHED_ACCOUNT_NUM, TO_ROUTING_NUM, VALID_AMOUNT,
+                testInfo.getDisplayName());
+
+        // When
+        final ResponseEntity actualResult =
+                controller.addTransaction(BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.CREATED, actualResult.getStatusCode());
+        verify(transactionRepository).save(transaction);
+    }
+
+    @Test
+    @DisplayName("Given an internal transaction covered by the balance "
+            + "reported by the balance service, return HTTP Status 201")
+    void addTransactionWhenBalanceServiceCoversAmount(TestInfo testInfo) {
+        // Given
+        LedgerWriterController controller = controllerWithScreenedAccounts("");
+        givenTransaction(AUTHED_ACCOUNT_NUM, LOCAL_ROUTING_NUM,
+                TO_ACCOUNT_NUM, TO_ROUTING_NUM, SMALLER_THAN_SENDER_BALANCE,
+                testInfo.getDisplayName());
+        when(restTemplate.exchange(anyString(), eq(HttpMethod.GET),
+                any(HttpEntity.class), eq(Integer.class))).thenReturn(
+                        new ResponseEntity<>(SENDER_BALANCE, HttpStatus.OK));
+
+        // When
+        final ResponseEntity actualResult =
+                controller.addTransaction(BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.CREATED, actualResult.getStatusCode());
+        verify(transactionRepository).save(transaction);
+        verifyNoInteractions(slackNotifier);
+    }
+
+    @Test
+    @DisplayName("Given the sender balance cannot cover the transaction, "
+            + "return HTTP Status 400 and write nothing to the ledger")
+    void addTransactionWhenInsufficientBalanceWritesNothing(TestInfo testInfo) {
+        // Given
+        LedgerWriterController controller =
+                spy(controllerWithScreenedAccounts(""));
+        givenTransaction(AUTHED_ACCOUNT_NUM, LOCAL_ROUTING_NUM,
+                TO_ACCOUNT_NUM, TO_ROUTING_NUM, LARGER_THAN_SENDER_BALANCE,
+                testInfo.getDisplayName());
+        doReturn(SENDER_BALANCE).when(controller).getAvailableBalance(
+                TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // When
+        final ResponseEntity actualResult =
+                controller.addTransaction(BEARER_TOKEN, transaction);
+
+        // Then
+        assertRejectedWithoutLedgerWrite(actualResult,
+                EXCEPTION_MESSAGE_INSUFFICIENT_BALANCE);
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_INSUFFICIENT_BALANCE));
+    }
+
+    @Test
+    @DisplayName("Given the bearer token fails verification, write nothing to "
+            + "the ledger and do not validate the transaction")
+    void addTransactionWhenUnauthorizedWritesNothing() {
+        // Given
+        when(verifier.verify(TOKEN)).thenThrow(JWTVerificationException.class);
+
+        // When
+        final ResponseEntity actualResult =
+                ledgerWriterController.addTransaction(
+                        BEARER_TOKEN, transaction);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        verifyNoInteractions(transactionRepository);
+        verifyNoInteractions(transactionValidator);
+    }
+
+    @Test
+    @DisplayName("Given the 'Authorization' header is null, write nothing to "
+            + "the ledger and alert")
+    void addTransactionWhenBearerTokenNullWritesNothing() {
+        // When
+        final ResponseEntity actualResult =
+                ledgerWriterController.addTransaction(null, transaction);
+
+        // Then
+        assertRejectedWithoutLedgerWrite(actualResult,
+                EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL);
+        verify(slackNotifier).notifyError(
+                contains(EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL));
     }
 }
