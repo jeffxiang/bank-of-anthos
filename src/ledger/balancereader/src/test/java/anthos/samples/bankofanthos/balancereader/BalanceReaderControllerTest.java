@@ -27,6 +27,7 @@ import java.util.concurrent.ExecutionException;
 
 import com.auth0.jwt.JWTVerifier;
 import com.auth0.jwt.exceptions.JWTVerificationException;
+import com.google.common.util.concurrent.UncheckedExecutionException;
 import com.auth0.jwt.interfaces.Claim;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.google.common.cache.CacheBuilder;
@@ -72,6 +73,7 @@ class BalanceReaderControllerTest {
     private static final String NON_AUTHED_ACCOUNT_NUM = "9876543210";
     private static final String BEARER_TOKEN = "Bearer abc";
     private static final String TOKEN = "abc";
+    private static final String MALFORMED_AUTH_HEADER = "Basic abc";
 
     @BeforeEach
     void setUp() {
@@ -226,6 +228,70 @@ class BalanceReaderControllerTest {
         when(jwt.getClaim(JWT_ACCOUNT_KEY)).thenReturn(claim);
         when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
         when(cache.get(AUTHED_ACCOUNT_NUM)).thenThrow(ExecutionException.class);
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given no Authorization header, return 401")
+    void getBalanceFailsWhenAuthorizationHeaderIsMissing() throws Exception {
+        // Given
+        when(verifier.verify((String) null)).thenThrow(JWTVerificationException.class);
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(null, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        verify(cache, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("Given an Authorization header without the Bearer scheme, "
+            + "the header is verified verbatim and rejected with 401")
+    void getBalanceFailsWhenAuthorizationHeaderIsMalformed() throws Exception {
+        // Given
+        when(verifier.verify(MALFORMED_AUTH_HEADER)).thenThrow(JWTVerificationException.class);
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(
+            MALFORMED_AUTH_HEADER, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        verify(cache, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("Given a valid token with no account claim, return 401")
+    void getBalanceFailsWhenAccountClaimIsMissing() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(null);
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+        verify(cache, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("Given the cache loader fails to reach the database, return 500")
+    void getBalanceFailsWhenCacheLoaderCannotReachDatabase() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(cache.get(AUTHED_ACCOUNT_NUM)).thenThrow(
+            new UncheckedExecutionException(
+                new DataAccessResourceFailureException("ledger-db unreachable")));
 
         // When
         final ResponseEntity actualResult = balanceReaderController.getBalance(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
