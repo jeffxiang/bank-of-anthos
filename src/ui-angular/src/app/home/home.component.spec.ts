@@ -21,6 +21,7 @@ import { RuntimeConfigService } from '../runtime-config.service';
 
 describe('HomeComponent', () => {
   let component: HomeComponent;
+  let fixture: ComponentFixture<HomeComponent>;
   let api: jasmine.SpyObj<ApiService>;
   const claims = { user: 'testuser', acct: '1011226111', name: 'Test User', iat: 1, exp: 9999999999 };
 
@@ -64,7 +65,7 @@ describe('HomeComponent', () => {
         TransactionsService
       ]
     }).compileComponents();
-    const fixture: ComponentFixture<HomeComponent> = TestBed.createComponent(HomeComponent);
+    fixture = TestBed.createComponent(HomeComponent);
     component = fixture.componentInstance;
     component.ngOnInit();
   });
@@ -207,6 +208,91 @@ describe('HomeComponent', () => {
     expect(api.addContact).toHaveBeenCalledWith('testuser', jasmine.objectContaining({
       routing_num: '883745000'
     }));
+  }));
+
+  it('blocks a payment with a missing amount', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.paymentForm.controls.amount.hasError('required')).toBeTrue();
+    expect(component.paymentForm.controls.amount.touched).toBeTrue();
+  });
+
+  it('blocks a payment with a negative amount', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '-5' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.paymentForm.controls.amount.hasError('min')).toBeTrue();
+  });
+
+  it('blocks a payment with a non-numeric amount', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: 'abc' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.submitting).toBeFalse();
+    expect(component.error).toBe('Payment failed: Unknown error');
+  });
+
+  it('blocks a payment with no recipient selected', () => {
+    component.paymentForm.patchValue({ recipient: '', amount: '12.34' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.paymentForm.controls.recipient.hasError('required')).toBeTrue();
+    expect(component.paymentForm.controls.recipient.touched).toBeTrue();
+  });
+
+  it('rejects a payment to a recipient that is not a known contact', () => {
+    component.paymentForm.patchValue({ recipient: '9999999999', amount: '12.34' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.error).toBe('Please select a recipient');
+  });
+
+  it('renders field validation messages after a rejected payment', () => {
+    fixture.detectChanges();
+    component.paymentForm.patchValue({ recipient: '', amount: '' });
+    component.submitPayment();
+    fixture.detectChanges();
+    const nodes: HTMLElement[] = Array.from(fixture.nativeElement.querySelectorAll('mat-error'));
+    const messages = nodes.map(node => node.textContent || '').join(' ');
+    expect(messages).toContain('Please select a recipient.');
+    expect(messages).toContain('Enter a positive transaction amount.');
+  });
+
+  it('renders the decline banner when the server returns SCREEN-403', () => {
+    api.transaction.and.returnValue(throwError(() => ({
+      error: { message: 'recipient screening declined (code SCREEN-403)' },
+      status: 400
+    })));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '12.34' });
+    component.submitPayment();
+    fixture.detectChanges();
+    const banner: HTMLElement = fixture.nativeElement.querySelector('.notice-error');
+    expect(banner.getAttribute('role')).toBe('alert');
+    expect(banner.textContent).toContain("We couldn't complete that request");
+    expect(banner.textContent).toContain('SCREEN-403');
+    expect(fixture.nativeElement.querySelector('.notice-success')).toBeNull();
+  });
+
+  it('clears the error banner when a retried payment succeeds', fakeAsync(() => {
+    api.transaction.and.returnValue(throwError(() => ({
+      error: { message: 'Service unavailable' },
+      status: 503
+    })));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '5.00' });
+    component.submitPayment();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.notice-error')).not.toBeNull();
+
+    api.transaction.and.returnValue(of('ok'));
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: '5.00' });
+    component.submitPayment();
+    tick(250);
+    fixture.detectChanges();
+    expect(component.error).toBe('');
+    expect(fixture.nativeElement.querySelector('.notice-error')).toBeNull();
+    const success: HTMLElement = fixture.nativeElement.querySelector('.notice-success');
+    expect(success.textContent).toContain('Payment successful');
   }));
 
   it('validates and rejects an invalid deposit', () => {
