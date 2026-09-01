@@ -18,6 +18,7 @@ package anthos.samples.bankofanthos.balancereader;
 
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.CacheStats;
+import com.google.common.util.concurrent.UncheckedExecutionException;
 import io.micrometer.core.instrument.Clock;
 import io.micrometer.core.instrument.binder.cache.GuavaCacheMetrics;
 import io.micrometer.core.lang.Nullable;
@@ -27,13 +28,17 @@ import java.util.concurrent.ExecutionException;
 
 import com.auth0.jwt.JWTVerifier;
 import com.auth0.jwt.exceptions.JWTVerificationException;
+import com.auth0.jwt.exceptions.TokenExpiredException;
 import com.auth0.jwt.interfaces.Claim;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.LoadingCache;
+import java.lang.reflect.Field;
+import java.time.Instant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.HttpStatus;
@@ -62,6 +67,12 @@ class BalanceReaderControllerTest {
     private LoadingCache<String, Long> cache;
     @Mock
     private CacheStats stats;
+    @Mock
+    private TransactionRepository dbRepo;
+    @Mock
+    private Transaction transaction;
+
+    private StackdriverMeterRegistry meterRegistry;
 
     private static final String VERSION = "v0.2.0";
     private static final String LOCAL_ROUTING_NUM = "123456789";
@@ -72,11 +83,14 @@ class BalanceReaderControllerTest {
     private static final String NON_AUTHED_ACCOUNT_NUM = "9876543210";
     private static final String BEARER_TOKEN = "Bearer abc";
     private static final String TOKEN = "abc";
+    private static final String EXTERNAL_ROUTING_NUM = "987654321";
+    private static final int TRANSACTION_AMOUNT = 25;
+    private static final int CACHE_SIZE = 100;
 
     @BeforeEach
     void setUp() {
         initMocks(this);
-        StackdriverMeterRegistry meterRegistry = new StackdriverMeterRegistry(new StackdriverConfig() {
+        meterRegistry = new StackdriverMeterRegistry(new StackdriverConfig() {
             @Override
             public boolean enabled() {
                 return false;
@@ -219,6 +233,165 @@ class BalanceReaderControllerTest {
     }
 
     @Test
+    @DisplayName("Given no Authorization header, return 401")
+    void getBalanceFailsWhenAuthorizationHeaderIsMissing() {
+        // Given
+        when(verifier.verify((String) null)).thenThrow(JWTVerificationException.class);
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(null, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given an expired token, return 401")
+    void getBalanceFailsWhenTokenIsExpired() {
+        // Given
+        when(verifier.verify(TOKEN)).thenThrow(
+            new TokenExpiredException("token expired", Instant.EPOCH));
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.UNAUTHORIZED, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given a token sent without the Bearer prefix, still authorize the request")
+    void getBalanceSucceedsWhenTokenHasNoBearerPrefix() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(cache.get(AUTHED_ACCOUNT_NUM)).thenReturn(BALANCE);
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.OK, actualResult.getStatusCode());
+        assertEquals(BALANCE, actualResult.getBody());
+    }
+
+    @Test
+    @DisplayName("Given the cache wraps a database failure in an unchecked exception, return 500")
+    void getBalanceFailsWhenCacheThrowsUncheckedExecutionException() throws Exception {
+        // Given
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(cache.get(AUTHED_ACCOUNT_NUM)).thenThrow(
+            new UncheckedExecutionException(new DataAccessResourceFailureException("db down")));
+
+        // When
+        final ResponseEntity actualResult = balanceReaderController.getBalance(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given the ledger database is unreachable, the real cache loader surfaces a 500")
+    void getBalanceFailsWhenLedgerDatabaseIsUnreachable() throws Exception {
+        // Given
+        when(dbRepo.findBalance(AUTHED_ACCOUNT_NUM, LOCAL_ROUTING_NUM))
+            .thenThrow(new ResourceAccessException("ledger unreachable"));
+        final BalanceReaderController controller = controllerWithRealCache();
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+
+        // When
+        final ResponseEntity actualResult = controller.getBalance(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("Given the ledger has no rows for the account, the real cache loader returns a zero balance")
+    void getBalanceReturnsZeroWhenLedgerHasNoRowsForAccount() throws Exception {
+        // Given
+        when(dbRepo.findBalance(AUTHED_ACCOUNT_NUM, LOCAL_ROUTING_NUM)).thenReturn(null);
+        final BalanceReaderController controller = controllerWithRealCache();
+        when(claim.asString()).thenReturn(AUTHED_ACCOUNT_NUM);
+
+        // When
+        final ResponseEntity actualResult = controller.getBalance(BEARER_TOKEN, AUTHED_ACCOUNT_NUM);
+
+        // Then
+        assertNotNull(actualResult);
+        assertEquals(HttpStatus.OK, actualResult.getStatusCode());
+        assertEquals(0L, actualResult.getBody());
+    }
+
+    @Test
+    @DisplayName("Given a transaction for accounts absent from the cache, do not populate the cache")
+    void ledgerCallbackLeavesUncachedAccountsAlone() throws Exception {
+        // Given
+        final LoadingCache<String, Long> realCache = newRealCache();
+        final LedgerReaderCallback callback = callbackOf(realCache);
+        when(transaction.getFromAccountNum()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getFromRoutingNum()).thenReturn(LOCAL_ROUTING_NUM);
+        when(transaction.getToAccountNum()).thenReturn(NON_AUTHED_ACCOUNT_NUM);
+        when(transaction.getToRoutingNum()).thenReturn(LOCAL_ROUTING_NUM);
+        when(transaction.getAmount()).thenReturn(TRANSACTION_AMOUNT);
+
+        // When
+        callback.processTransaction(transaction);
+
+        // Then
+        assertTrue(realCache.asMap().isEmpty());
+        verifyNoInteractions(dbRepo);
+    }
+
+    @Test
+    @DisplayName("Given a transaction routed to another bank, leave cached balances untouched")
+    void ledgerCallbackIgnoresExternalRoutingNumbers() throws Exception {
+        // Given
+        final LoadingCache<String, Long> realCache = newRealCache();
+        final LedgerReaderCallback callback = callbackOf(realCache);
+        realCache.put(AUTHED_ACCOUNT_NUM, BALANCE);
+        realCache.put(NON_AUTHED_ACCOUNT_NUM, BALANCE);
+        when(transaction.getFromAccountNum()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getFromRoutingNum()).thenReturn(EXTERNAL_ROUTING_NUM);
+        when(transaction.getToAccountNum()).thenReturn(NON_AUTHED_ACCOUNT_NUM);
+        when(transaction.getToRoutingNum()).thenReturn(EXTERNAL_ROUTING_NUM);
+        when(transaction.getAmount()).thenReturn(TRANSACTION_AMOUNT);
+
+        // When
+        callback.processTransaction(transaction);
+
+        // Then
+        assertEquals(BALANCE, realCache.asMap().get(AUTHED_ACCOUNT_NUM));
+        assertEquals(BALANCE, realCache.asMap().get(NON_AUTHED_ACCOUNT_NUM));
+    }
+
+    @Test
+    @DisplayName("Given a local transaction between cached accounts, move the amount between them")
+    void ledgerCallbackUpdatesCachedLocalAccounts() throws Exception {
+        // Given
+        final LoadingCache<String, Long> realCache = newRealCache();
+        final LedgerReaderCallback callback = callbackOf(realCache);
+        realCache.put(AUTHED_ACCOUNT_NUM, BALANCE);
+        realCache.put(NON_AUTHED_ACCOUNT_NUM, BALANCE);
+        when(transaction.getFromAccountNum()).thenReturn(AUTHED_ACCOUNT_NUM);
+        when(transaction.getFromRoutingNum()).thenReturn(LOCAL_ROUTING_NUM);
+        when(transaction.getToAccountNum()).thenReturn(NON_AUTHED_ACCOUNT_NUM);
+        when(transaction.getToRoutingNum()).thenReturn(LOCAL_ROUTING_NUM);
+        when(transaction.getAmount()).thenReturn(TRANSACTION_AMOUNT);
+
+        // When
+        callback.processTransaction(transaction);
+
+        // Then
+        assertEquals(BALANCE - TRANSACTION_AMOUNT, realCache.asMap().get(AUTHED_ACCOUNT_NUM));
+        assertEquals(BALANCE + TRANSACTION_AMOUNT, realCache.asMap().get(NON_AUTHED_ACCOUNT_NUM));
+    }
+
+    @Test
     @DisplayName("Given the cache throws an error for an authenticated user, return 500")
     void getBalanceFailsWhenCacheThrowsError() throws Exception {
         // Given
@@ -235,4 +408,28 @@ class BalanceReaderControllerTest {
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, actualResult.getStatusCode());
     }
 
+    /** Builds the production Guava cache backed by the mocked repository. */
+    private LoadingCache<String, Long> newRealCache() throws Exception {
+        final BalanceCache balanceCache = new BalanceCache();
+        final Field repoField = BalanceCache.class.getDeclaredField("dbRepo");
+        repoField.setAccessible(true);
+        repoField.set(balanceCache, dbRepo);
+        return balanceCache.initializeCache(CACHE_SIZE, LOCAL_ROUTING_NUM);
+    }
+
+    private BalanceReaderController controllerWithRealCache() throws Exception {
+        return new BalanceReaderController(ledgerReader, verifier, meterRegistry,
+            newRealCache(), LOCAL_ROUTING_NUM, VERSION);
+    }
+
+    /** Captures the ledger callback registered by a controller using the given cache. */
+    private LedgerReaderCallback callbackOf(LoadingCache<String, Long> realCache) {
+        clearInvocations(ledgerReader);
+        new BalanceReaderController(ledgerReader, verifier, meterRegistry,
+            realCache, LOCAL_ROUTING_NUM, VERSION);
+        final ArgumentCaptor<LedgerReaderCallback> captor =
+            ArgumentCaptor.forClass(LedgerReaderCallback.class);
+        verify(ledgerReader).startWithCallback(captor.capture());
+        return captor.getValue();
+    }
 }
