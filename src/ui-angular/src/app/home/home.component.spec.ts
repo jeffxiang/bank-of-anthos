@@ -180,6 +180,45 @@ describe('HomeComponent', () => {
     expect(component.error).toContain('upstream=http://ledgerwriter:8080/transactions');
   });
 
+  it('does not post a payment for a non-numeric amount', () => {
+    component.paymentForm.patchValue({ recipient: '1033623433', amount: 'abc' });
+    component.submitPayment();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.submitting).toBeFalse();
+    expect(component.message).toBe('');
+    expect(component.error).toContain('Payment failed');
+  });
+
+  it('rejects zero, negative and missing payment amounts before any request', () => {
+    for (const amount of ['0', '-5', '']) {
+      component.paymentForm.patchValue({ recipient: '1033623433', amount });
+      component.submitPayment();
+      expect(api.transaction).not.toHaveBeenCalled();
+      expect(component.paymentForm.touched).toBeTrue();
+      expect(component.error).toBe('');
+      expect(component.message).toBe('');
+    }
+  });
+
+  it('rejects malformed new recipient account numbers', () => {
+    for (const newAccount of ['123', '10336234333', '1033623仮43', '10336234🐻']) {
+      component.paymentForm.patchValue({ recipient: 'add', newAccount, amount: '12.34' });
+      component.submitPayment();
+      expect(component.paymentForm.get('newAccount')?.valid).toBeFalse();
+      expect(api.addContact).not.toHaveBeenCalled();
+      expect(api.transaction).not.toHaveBeenCalled();
+    }
+  });
+
+  it('asks for a recipient when adding one without an account number', () => {
+    component.paymentForm.patchValue({ recipient: 'add', newAccount: '', amount: '12.34' });
+    component.submitPayment();
+    expect(component.error).toBe('Please select a recipient');
+    expect(api.addContact).not.toHaveBeenCalled();
+    expect(api.transaction).not.toHaveBeenCalled();
+    expect(component.submitting).toBeFalse();
+  });
+
   it('refreshes account data after a successful deposit', fakeAsync(() => {
     const response = new Subject<string>();
     api.transaction.and.returnValue(response);
