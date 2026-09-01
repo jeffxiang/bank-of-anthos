@@ -288,6 +288,47 @@ class TestUserservice(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, b'failed to create user')
 
+    def test_create_user_whitespace_only_pii_201_status_code_stored_unstripped(self):
+        """test whitespace-only PII fields are accepted and stored as-is"""
+        for field in ('ssn', 'address', 'state', 'zip'):
+            self.mocked_db.return_value.get_user.return_value = None
+            self.mocked_db.return_value.generate_accountid.return_value = '123'
+            example_user_request = EXAMPLE_USER_REQUEST.copy()
+            example_user_request[field] = '   '
+            response = self.test_app.post('/users', data=example_user_request)
+            self.assertEqual(response.status_code, 201,
+                             '{} returned unexpected status code'.format(field))
+            user_object = self.mocked_db.return_value.add_user.call_args[0][0]
+            self.assertEqual(user_object[field], '   ',
+                             '{} was not stored verbatim'.format(field))
+
+    def test_login_missing_password_raises_type_error(self):
+        """test logging in without a password parameter is not handled"""
+        example_user_request = EXAMPLE_USER_REQUEST.copy()
+        with self.assertRaises(TypeError):
+            self.test_app.get('/login',
+                              query_string={'username': example_user_request['username']})
+
+    def test_login_sql_error_500_status_code_error_message(self):
+        """test logging in when the user lookup raises a SQL error"""
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        # assert 500 response
+        self.assertEqual(response.status_code, 500)
+        # assert we get correct error message
+        self.assertEqual(response.data, b'failed to retrieve user information')
+
+    # mock check pw to return true to simulate correct password
+    @patch('bcrypt.checkpw', return_value=True)
+    @patch('userservice.userservice.jwt.encode',
+           side_effect=jwt.exceptions.PyJWTError('signing failed'))
+    def test_login_jwt_signing_failure_raises_error(self, _mock_encode, _mock_checkpw):
+        """test a JWT signing failure during login is not handled"""
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        with self.assertRaises(jwt.exceptions.PyJWTError):
+            self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """
         # mock return value of get_user which checks if user exists as None
