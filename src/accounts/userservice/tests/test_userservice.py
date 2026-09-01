@@ -22,7 +22,7 @@ import unittest
 from unittest.mock import patch, mock_open
 
 from requests.exceptions import RequestException
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 import jwt
 
 from userservice.userservice import create_app
@@ -287,6 +287,114 @@ class TestUserservice(unittest.TestCase):
         response = self.test_app.post('/users', data=EXAMPLE_USER_REQUEST.copy())
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, b'failed to create user')
+
+    def _assert_no_pii_or_token(self, body, extra=()):
+        """assert a response body leaks no PII, credentials or token material"""
+        haystack = body.decode(errors='ignore').lower()
+        secrets = [
+            EXAMPLE_USER_REQUEST['ssn'],
+            EXAMPLE_USER_REQUEST['password'],
+            EXAMPLE_USER_REQUEST['birthday'],
+            EXAMPLE_USER_REQUEST['address'],
+            EXAMPLE_PRIVATE_KEY.decode(),
+            'token',
+        ]
+        secrets.extend(extra)
+        for secret in secrets:
+            self.assertNotIn(secret.lower(), haystack)
+
+    @unittest.expectedFailure
+    def test_create_user_whitespace_only_pii_400_status_code_error_message(self):
+        """whitespace-only PII values should be rejected as missing values
+
+        Marked as an expected failure: the validator's
+        `not bool(req[f] or req[f].strip())` check treats a whitespace-only
+        value as present, so fields such as ssn are stored verbatim.
+        """
+        self.mocked_db.return_value.get_user.return_value = None
+        self.mocked_db.return_value.generate_accountid.return_value = '123'
+        for field in ('ssn', 'firstname', 'lastname', 'address', 'state', 'zip'):
+            example_user = EXAMPLE_USER_REQUEST.copy()
+            example_user[field] = '   '
+            response = self.test_app.post('/users', data=example_user)
+            self.assertEqual(response.status_code, 400,
+                             'whitespace-only {} was accepted'.format(field))
+            self.assertEqual(response.data, b'missing value for input field(s)')
+
+    def test_create_user_db_lookup_error_500_status_code_no_pii_leak(self):
+        """test the user-exists lookup failing returns a generic 500"""
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError(
+            'connection to accounts-db failed for user jdoe ssn 123'
+        )
+        with self.assertLogs(self.flask_app.logger, level='ERROR') as logs:
+            response = self.test_app.post('/users', data=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data, b'failed to create user')
+        self._assert_no_pii_or_token(response.data)
+        self.assertNotIn(EXAMPLE_USER_REQUEST['password'], '\n'.join(logs.output))
+
+    def test_login_db_error_500_status_code_no_pii_leak(self):
+        """test a DB failure during login returns a generic 500"""
+        self.mocked_db.return_value.get_user.side_effect = SQLAlchemyError()
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        response = self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data, b'failed to retrieve user information')
+        self._assert_no_pii_or_token(response.data)
+
+    def test_login_missing_parameter_no_token_returned(self):
+        """test login without a username or password parameter fails closed"""
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        for query_string in ({'password': 'pwd'}, {'username': 'jdoe'}, {}):
+            # the missing parameter is never sanitized into a lookup or a token
+            with self.assertRaises(TypeError):
+                self.test_app.get('/login', query_string=query_string)
+            self.mocked_db.return_value.get_user.assert_not_called()
+
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_jwt_signing_key_invalid_no_token_returned(self, _mock_checkpw):
+        """test an unusable signing key aborts login instead of issuing a token"""
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        self.flask_app.config['PRIVATE_KEY'] = 'not-a-private-key'
+        with self.assertRaises(jwt.exceptions.InvalidKeyError) as err_ctx:
+            self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        # the failure must not echo the key material back out
+        self.assertNotIn('not-a-private-key', str(err_ctx.exception))
+
+    @patch('userservice.userservice.jwt.encode',
+           side_effect=jwt.exceptions.PyJWTError('signing backend unavailable'))
+    @patch('bcrypt.checkpw', return_value=True)
+    def test_login_jwt_encode_error_no_token_returned(self, _mock_checkpw, mock_encode):
+        """test a signing failure is not swallowed into a 200 with an empty token"""
+        self.mocked_db.return_value.get_user.return_value = EXAMPLE_USER.copy()
+        self.flask_app.config['PRIVATE_KEY'] = EXAMPLE_PRIVATE_KEY
+        with self.assertRaises(jwt.exceptions.PyJWTError):
+            self.test_app.get('/login', query_string=EXAMPLE_USER_REQUEST.copy())
+        # the signed payload never carries the password or ssn
+        payload = mock_encode.call_args[0][0]
+        self.assertEqual(
+            sorted(payload.keys()), ['acct', 'exp', 'iat', 'name', 'user']
+        )
+
+    def test_create_app_db_connection_failure_exits(self):
+        """test a failed database connection aborts startup"""
+        with patch('userservice.userservice.open', mock_open(read_data='foo')):
+            with patch(
+                'os.environ',
+                {
+                    'VERSION': '1',
+                    'TOKEN_EXPIRY_SECONDS': '3600',
+                    'PRIV_KEY_PATH': '1',
+                    'PUB_KEY_PATH': '1',
+                    'ENABLE_TRACING': 'false',
+                },
+            ):
+                with patch('userservice.userservice.UserDb',
+                           side_effect=OperationalError('stmt', {}, Exception())):
+                    with self.assertRaises(SystemExit) as exit_ctx:
+                        create_app()
+        self.assertEqual(exit_ctx.exception.code, 1)
 
     def test_create_user_400_status_code_invalid_username(self,):
         """test adding a contact with invalid labels """
