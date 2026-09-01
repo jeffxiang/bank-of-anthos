@@ -87,8 +87,17 @@ test-unit:
 	mvn test
 	for SERVICE in "accounts/contacts" "accounts/userservice"; \
 	do \
-		(cd src/$$SERVICE && uv run pytest -v -p no:warnings); \
+		(cd src/$$SERVICE && uv run pytest -v -p no:warnings \
+			--cov=. --cov-report=term-missing --cov-report=xml:coverage.xml); \
 	done
+	# frontend has no test suite yet; run it only when tests exist
+	if [ -d src/frontend/tests ]; then \
+		(cd src/frontend && uv run pytest -v -p no:warnings \
+			--cov=. --cov-report=term-missing --cov-report=xml:coverage.xml); \
+	fi
+
+test-unit-angular:
+	(cd src/ui-angular && npm run test:coverage)
 
 upgrade-py-deps:
 	for SERVICE in "frontend" "accounts/contacts" "accounts/userservice" "loadgenerator"; \

@@ -1,0 +1,134 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Test Coverage (report-only)
+
+# Report-only: every step is non-blocking so coverage never fails a PR.
+# Promote to a gate by removing `continue-on-error` and adding thresholds.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  java:
+    name: Java (JaCoCo)
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+      - name: Run unit tests with coverage
+        continue-on-error: true
+        run: mvn -B test -Dcheckstyle.skip=true
+      - name: Summarize coverage
+        continue-on-error: true
+        run: ./.github/scripts/jacoco-summary.sh >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload JaCoCo reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-reports
+          path: '**/target/site/jacoco/**'
+          if-no-files-found: warn
+
+  python:
+    name: Python (pytest-cov)
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - src/accounts/contacts
+          - src/accounts/userservice
+          - src/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Run pytest with coverage
+        continue-on-error: true
+        working-directory: ${{ matrix.service }}
+        run: |
+          if [ ! -d tests ]; then
+            echo "::notice::${{ matrix.service }} has no tests/ directory yet; skipping"
+            exit 0
+          fi
+          uv run pytest -p no:warnings \
+            --cov=. --cov-report=term-missing --cov-report=xml:coverage.xml \
+            | tee coverage.txt
+          {
+            echo "### ${{ matrix.service }}"
+            echo '```'
+            tail -n 25 coverage.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload coverage.xml
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-coverage-${{ strategy.job-index }}
+          path: ${{ matrix.service }}/coverage.xml
+          if-no-files-found: warn
+
+  angular:
+    name: Angular (karma-coverage)
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node 16.10
+        uses: actions/setup-node@v4
+        with:
+          node-version: '16.10.0'
+          cache: 'npm'
+          cache-dependency-path: src/ui-angular/package-lock.json
+      - name: Install dependencies
+        working-directory: src/ui-angular
+        run: npm ci
+      - name: Run tests with coverage
+        continue-on-error: true
+        working-directory: src/ui-angular
+        run: npm run test:coverage
+      - name: Summarize coverage
+        continue-on-error: true
+        working-directory: src/ui-angular
+        run: |
+          {
+            echo "### src/ui-angular"
+            echo '```json'
+            cat coverage/ui-angular/coverage-summary.json | head -c 2000
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: angular-coverage
+          path: src/ui-angular/coverage/**
+          if-no-files-found: warn
